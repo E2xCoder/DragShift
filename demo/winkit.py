@@ -210,8 +210,17 @@ def _item_rect(container, name: str):
 
 
 def item_center(container, name: str):
-    _, r = _item_rect(container, name)
-    return (r.left + r.right) // 2, r.top + int((r.bottom - r.top) * 0.38)
+    """Icon position via UI Automation; retried, since UIA occasionally throws transient COM errors."""
+    last = None
+    for attempt in range(4):
+        try:
+            _, r = _item_rect(container, name)
+            return (r.left + r.right) // 2, r.top + int((r.bottom - r.top) * 0.38)
+        except Exception as e:  # COMError / timeout
+            last = e
+            log(f"item lookup retry {attempt + 1} for {name}: {type(e).__name__}")
+            time.sleep(0.6)
+    raise last
 
 
 def desktop_view():
