@@ -15,6 +15,7 @@ import pyautogui
 from PIL import Image, ImageDraw
 
 import winkit as wk
+import dragshift.convert  # noqa: F401  (registers HEIC/AVIF support for the verifiers)
 
 OUT = wk.ROOT / "e2e_out"
 OUT.mkdir(exist_ok=True)
@@ -107,6 +108,28 @@ def stash(folder: Path, before: set[str]):
             pass
 
 
+SOURCES = ["Photo.jpg", "Second.jpg", "Graphic.png", "Report.pdf", "Appendix.pdf", "Letter.docx", "Notes.txt"]
+
+
+def restore_sources(folder: Path):
+    """If an earlier failure let Windows move a file away (Shift-drop without the menu = move),
+    put it back so one failure can't cascade into the rest of the run."""
+    prefix = "" if folder == EXP else "D-"
+    missing = [n for n in SOURCES if not (folder / (prefix + n)).exists()]
+    if missing:
+        wk.log("restoring sources:", missing)
+        for n in missing:
+            stray = DESK / (prefix + n) if folder == EXP else None
+            if stray is not None and stray.exists():
+                stray.unlink()
+        make_files(folder, prefix)
+        time.sleep(1.0)
+    # stray copies of Explorer files dropped on the desktop
+    for n in SOURCES:
+        if (DESK / n).exists():
+            (DESK / n).unlink()
+
+
 # ------------------------------------------------------------------ verification helpers
 def img_ok(p: Path, fmt=None):
     with Image.open(p) as im:
@@ -136,6 +159,7 @@ def ring_index(paths: list[str], ring: str, label: str) -> tuple[int, int, int]:
 def run(name: str, where: str, files: list[str], ring: str, label: str, verify, tool=None, select_extra=None):
     folder = EXP if where == "explorer" else DESK
     srcs = [str(folder / f) for f in files]
+    restore_sources(folder)
     before = snapshot(folder)
     t0 = time.time()
     status, msg = "PASS", ""
