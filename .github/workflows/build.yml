@@ -219,10 +219,21 @@ jobs:
       - name: Install the .deb and self-test it
         env:
           QT_QPA_PLATFORM: offscreen
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
         run: |
-          apt-get install -y -q ./dist/DragShift-linux-amd64.deb
+          mkdir -p e2e_linux_out
+          apt-get install -y -q ./dist/DragShift-linux-amd64.deb 2>&1 | tail -5
           test -x /usr/bin/dragshift
-          dragshift --selftest
+          set +e
+          dragshift --selftest > e2e_linux_out/selftest.txt 2>&1
+          rc=$?
+          set -e
+          cat e2e_linux_out/selftest.txt
+          if [ $rc -ne 0 ]; then
+            tail -25 e2e_linux_out/selftest.txt | sed 's/%/%25/g' | while IFS= read -r l; do echo "::error title=selftest::$l"; done
+            exit $rc
+          fi
 
       - name: End-to-end on XFCE (Xvfb + xfwm4 with compositor off + Thunar)
         run: |
@@ -234,7 +245,7 @@ jobs:
           feh --no-fehbg --bg-fill /tmp/wall.png
           xfwm4 --compositor=off >/tmp/xfwm4.log 2>&1 &
           sleep 2
-          /opt/venv/bin/python demo/e2e_linux.py
+          /opt/venv/bin/python demo/e2e_linux.py || { tail -15 e2e_linux_out/log.txt | sed 's/%/%25/g' | while IFS= read -r l; do echo "::error title=e2e::$l"; done; exit 1; }
 
       - name: Summary
         if: always()
@@ -251,8 +262,9 @@ jobs:
           git rm -rfq . || true
           git clean -fdxq -e dist || true
           cp -r /tmp/o/* . || true
+          echo "Run ${GITHUB_SHA}" > RUN.txt
           git add -A -- . ':!dist'
-          git commit -qm "Debian/XFCE E2E results ${GITHUB_SHA}" || true
+          git commit -qm "Debian/XFCE E2E results ${GITHUB_SHA}"
           git push -f origin e2e-linux-output
 
       - uses: actions/upload-artifact@v4
