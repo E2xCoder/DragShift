@@ -3,6 +3,7 @@ name: End-to-end test (real Windows desktop)
 on:
   push:
     branches: [main, e2e]
+    paths-ignore: ["**.md", "docs/**"]
   workflow_dispatch:
 
 permissions:
