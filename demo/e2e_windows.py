@@ -79,18 +79,23 @@ def snapshot(folder: Path) -> set[str]:
     return {str(p.relative_to(folder)) for p in folder.rglob("*")}
 
 
-def new_files(folder: Path, before: set[str], timeout=15, settle=1.0) -> list[Path]:
+def new_files(folder: Path, before: set[str], timeout=15) -> list[Path]:
+    """New files (ignoring in-progress '.~*.part'), once their sizes stop changing."""
     end = time.time() + timeout
-    found: list[Path] = []
-    while time.time() < end:
+
+    def current():
         now = snapshot(folder) - before
-        files = [folder / n for n in now if (folder / n).is_file()]
-        if files:
-            time.sleep(settle)  # let writes finish
-            now = snapshot(folder) - before
-            return sorted(folder / n for n in now if (folder / n).is_file())
+        return {n: (folder / n).stat().st_size for n in now
+                if (folder / n).is_file() and not Path(n).name.startswith(".~")}
+    while time.time() < end:
+        a = current()
+        if a:
+            time.sleep(0.8)
+            b = current()
+            if a == b:
+                return sorted(folder / n for n in b)
         time.sleep(0.25)
-    return found
+    return []
 
 
 def stash(folder: Path, before: set[str]):
@@ -156,6 +161,10 @@ def ring_index(paths: list[str], ring: str, label: str) -> tuple[int, int, int]:
 
 
 # ------------------------------------------------------------------ scenario runner
+def safe(name: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_ ." else "_" for c in name).replace(" ", "_")
+
+
 def run(name: str, where: str, files: list[str], ring: str, label: str, verify, tool=None, select_extra=None):
     folder = EXP if where == "explorer" else DESK
     srcs = [str(folder / f) for f in files]
@@ -196,7 +205,7 @@ def run(name: str, where: str, files: list[str], ring: str, label: str, verify, 
         target = wk.petal_xy(c, n, idx)
         wk.glide(*target, 0.4)
         time.sleep(0.35)
-        wk.shot(OUT / "shots" / f"{len(RESULTS) + 1:02d}_{name.replace(' ', '_').replace('/', '-')}_menu.png")
+        wk.shot(OUT / "shots" / f"{len(RESULTS) + 1:02d}_{safe(name)}_menu.png")
         wk.drop()
         if tool:
             tool()
@@ -209,7 +218,7 @@ def run(name: str, where: str, files: list[str], ring: str, label: str, verify, 
         status = "FAIL"
         msg = f"{type(e).__name__}: {e}"
         wk.log(traceback.format_exc())
-        wk.shot(OUT / "shots" / f"{len(RESULTS) + 1:02d}_FAIL_{name.replace(' ', '_')}.png")
+        wk.shot(OUT / "shots" / f"{len(RESULTS) + 1:02d}_FAIL_{safe(name)}.png")
         pyautogui.mouseUp()
         pyautogui.keyUp("shift")
         pyautogui.press("esc")
@@ -484,12 +493,13 @@ def run_ipc(name: str, file: str, label: str, verify):
         wk.glide(int(sw * 0.62), int(sh * 0.45), 0.4)
         c = pyautogui.position()
         pyw = Path(sys.executable).with_name("pythonw.exe")
-        subprocess.Popen([str(pyw), "-m", "dragshift", str(folder / file)], cwd=str(wk.ROOT))
-        time.sleep(1.8)
+        env = dict(__import__("os").environ, DRAGSHIFT_RECORDING="1")
+        subprocess.Popen([str(pyw), "-m", "dragshift", str(folder / file)], cwd=str(wk.ROOT), env=env)
+        time.sleep(2.5)  # instant hand-off to the running copy, menu opens
         _, idx, n = ring_index([str(folder / file)], "Convert", label)
         wk.glide(*wk.petal_xy(c, n, idx), 0.4)
         time.sleep(0.3)
-        wk.shot(OUT / "shots" / f"{len(RESULTS) + 1:02d}_{name.replace(' ', '_')}_menu.png")
+        wk.shot(OUT / "shots" / f"{len(RESULTS) + 1:02d}_{safe(name)}_menu.png")
         pyautogui.click()
         outs = new_files(folder, before)
         if not outs:

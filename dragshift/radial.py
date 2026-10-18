@@ -271,8 +271,8 @@ class RadialMenu(QWidget):
             self.cursor_pos = QPointF(pos)
         if h != self.hover:
             self.hover = h
-            if h >= 0 or h == -1:
-                self.hub_armed = True  # left the hub at least once
+            if h >= 0:
+                self.hub_armed = True  # visited a petal: hovering the hub may now flip rings
             if h == -2 and self.hub_armed and len(self.ring_names) > 1:
                 self.hub_timer.start()
             else:

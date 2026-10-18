@@ -94,6 +94,11 @@ class ToolWindow(GlassWindow):
         self.primary_btn: QPushButton | None = None
 
     def _enter(self):
+        from PySide6.QtWidgets import QApplication
+        fw = QApplication.focusWidget()
+        if isinstance(fw, QLineEdit) and isinstance(fw.parent(), ImageView):
+            fw.returnPressed.emit()   # Enter in an on-canvas text box finishes the text
+            return
         if self.primary_btn is not None and self.primary_btn.isEnabled():
             self.primary_btn.click()
 
@@ -361,7 +366,15 @@ class CropWindow(ToolWindow):
 
     def apply(self):
         s, k, rot, path = self.view.sel, self.view.k, self.rot, self.path
-        box = tuple(round(v * k) for v in (s.left(), s.top(), s.right(), s.bottom()))
+        x0, y0 = round(s.left() * k), round(s.top() * k)
+        w, h = round(s.width() * k), round(s.height() * k)
+        if self.view.ratio:  # enforce the exact ratio after scaling (no 1600×1599)
+            h = round(w / self.view.ratio)
+            fw, fh = (self.full_size[1], self.full_size[0]) if rot % 180 else self.full_size
+            if y0 + h > fh:
+                h = fh - y0
+                w = round(h * self.view.ratio)
+        box = (x0, y0, x0 + w, y0 + h)
 
         def work():
             im = open_image(path)
@@ -525,7 +538,8 @@ class AddBgWindow(ToolWindow):
         def work():
             out_im = imaging.add_background(open_image(path), params)
             out = sibling(path, "With Background", ".png")
-            out_im.save(out, "PNG", optimize=True)
+            from .convert import save_image
+            save_image(out_im, out, "PNG")
             return [out]
         self.run(work, "Adding background…")
 

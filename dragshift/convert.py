@@ -99,7 +99,26 @@ def save_image(im: Image.Image, out: Path, target: str, quality: int | None = No
         kw["resolution"] = 150.0
     if exif and target in ("JPG", "WEBP", "PNG", "TIFF"):
         kw["exif"] = exif
-    im.save(out, fmt, **kw)
+    atomic_save(lambda dst: im.save(dst, fmt, **kw), out)
+
+
+def atomic_save(write, out):
+    """Write to a hidden temp file, then rename: Explorer never shows a half-written file."""
+    import os
+    if not isinstance(out, (str, Path)):
+        write(out)  # in-memory buffer
+        return
+    out = Path(out)
+    tmp = out.with_name(f".~{out.name}.part")
+    try:
+        write(tmp)
+        os.replace(tmp, out)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 def image_to(src: str | Path, target: str) -> list[Path]:

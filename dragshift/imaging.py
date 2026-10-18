@@ -8,7 +8,7 @@ from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 from PIL.ExifTags import GPSTAGS, TAGS
 
-from .convert import fitz, flatten, open_image, open_pdf, save_image
+from .convert import atomic_save, fitz, flatten, open_image, open_pdf, save_image
 from .util import sibling
 
 EXT_TARGET = {".jpg": "JPG", ".jpeg": "JPG", ".png": "PNG", ".webp": "WEBP", ".tif": "TIFF",
@@ -44,7 +44,7 @@ def compress_image(src: str | Path, quality: int = 72, max_side: int | None = No
         colors = max(16, min(256, int(quality * 2.56)))
         q = im.convert("RGBA").quantize(colors=colors, method=Image.Quantize.FASTOCTREE,
                                         dither=Image.Dither.FLOYDSTEINBERG)
-        q.save(out, "PNG", optimize=True)
+        atomic_save(lambda dst: q.save(dst, "PNG", optimize=True), out)
     elif tgt in ("BMP", "TIFF", "GIF", "ICO"):
         out = sibling(src, "Compressed", ".jpg")
         save_image(im, out, "JPG", quality=quality)
@@ -115,8 +115,9 @@ def compress_to(src: str | Path, quality: int, max_side: int | None, target: str
     out = sibling(src, "Compressed", "." + ("jpg" if target == "JPG" else target.lower()))
     if target == "PNG":
         colors = max(16, min(256, int(quality * 2.56)))
-        im.convert("RGBA").quantize(colors=colors, method=Image.Quantize.FASTOCTREE,
-                                    dither=Image.Dither.FLOYDSTEINBERG).save(out, "PNG", optimize=True)
+        q = im.convert("RGBA").quantize(colors=colors, method=Image.Quantize.FASTOCTREE,
+                                        dither=Image.Dither.FLOYDSTEINBERG)
+        atomic_save(lambda dst: q.save(dst, "PNG", optimize=True), out)
     else:
         save_image(im, out, target, quality=quality)
     return out

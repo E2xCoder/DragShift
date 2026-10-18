@@ -23,7 +23,8 @@ from .util import UserError, category, file_size, human_size, keep, release
 APP_NAME = "DragShift"
 VERSION = __version__
 IS_WIN = sys.platform == "win32"
-IPC_NAME = "DragShift-" + (os.environ.get("USERNAME") or os.environ.get("USER") or "user")
+from .handoff import ipc_name
+IPC_NAME = ipc_name()
 
 GLYPHS = {"Compress": "⇲", "Metadata": "ⓘ", "Redact": "▮", "Crop": "⌗", "Edit": "☼",
           "Annotate": "✎", "Add BG": "▣", "Resize": "⤢", "Split": "✂", "Rotate": "⟳",
