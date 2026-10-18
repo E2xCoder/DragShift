@@ -127,6 +127,38 @@ jobs:
           codesign --verify --deep --verbose=2 dist/DragShift.app || true
           /usr/libexec/PlistBuddy -c "Print :LSUIElement" dist/DragShift.app/Contents/Info.plist
 
+      - name: Sign & notarize the app (only when Apple credentials are configured)
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$MACOS_CERT_P12" ]; then
+            echo "No Apple Developer ID configured: shipping ad-hoc signed (users see Gatekeeper's warning)."
+            exit 0
+          fi
+          KC=build.keychain; KCPW=$(uuidgen)
+          echo "$MACOS_CERT_P12" | base64 --decode > cert.p12
+          security create-keychain -p "$KCPW" $KC
+          security set-keychain-settings -lut 21600 $KC
+          security unlock-keychain -p "$KCPW" $KC
+          security import cert.p12 -k $KC -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -d user -s $KC $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KCPW" $KC
+          # sign every nested binary first, then the bundle (hardened runtime + timestamp)
+          find dist/DragShift.app/Contents -type f \( -name "*.so" -o -name "*.dylib" -o -perm -111 \) -print0 |
+            xargs -0 -I{} codesign --force --timestamp --options runtime --entitlements installer/entitlements.plist --sign "$MACOS_SIGN_IDENTITY" "{}" || true
+          codesign --force --deep --timestamp --options runtime --entitlements installer/entitlements.plist --sign "$MACOS_SIGN_IDENTITY" dist/DragShift.app
+          codesign --verify --deep --strict --verbose=2 dist/DragShift.app
+          ditto -c -k --keepParent dist/DragShift.app DragShift.zip
+          xcrun notarytool submit DragShift.zip --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple dist/DragShift.app
+          spctl --assess --type execute --verbose dist/DragShift.app
+          echo "SIGNED=1" >> $GITHUB_ENV
+
       - name: Make the .dmg (drag DragShift to Applications)
         run: |
           mkdir -p dmg
@@ -134,6 +166,11 @@ jobs:
           ln -s /Applications dmg/Applications
           hdiutil create -volname "DragShift" -srcfolder dmg -ov -format UDZO "dist/DragShift-mac-${{ matrix.arch }}.dmg"
           du -h "dist/DragShift-mac-${{ matrix.arch }}.dmg"
+          if [ "$SIGNED" = "1" ]; then
+            codesign --force --timestamp --sign "${{ secrets.MACOS_SIGN_IDENTITY }}" "dist/DragShift-mac-${{ matrix.arch }}.dmg"
+            xcrun notarytool submit "dist/DragShift-mac-${{ matrix.arch }}.dmg" --apple-id "${{ secrets.APPLE_ID }}" --password "${{ secrets.APPLE_APP_PASSWORD }}" --team-id "${{ secrets.APPLE_TEAM_ID }}" --wait
+            xcrun stapler staple "dist/DragShift-mac-${{ matrix.arch }}.dmg"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -167,7 +204,9 @@ jobs:
             **Mac** (macOS 11+)
             - **DragShift-mac-apple-silicon.dmg** — M1/M2/M3/M4 Macs.
             - **DragShift-mac-intel.dmg** — Intel Macs.
-            Open the .dmg and drag DragShift to Applications. First launch: right-click the app → **Open** (it isn't notarized by Apple yet).
+            Open the .dmg and drag DragShift to Applications.
+            **First launch (until DragShift is notarized by Apple):** open DragShift once and click **Done** on the warning, then go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to "DragShift was blocked", and confirm. You only do this once.
+            Or in Terminal: `xattr -dr com.apple.quarantine /Applications/DragShift.app`
 
             Enjoying DragShift? Tips are welcome: [Cash App $AtikaKadesha](https://cash.app/$AtikaKadesha) ♥
 

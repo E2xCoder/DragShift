@@ -16,7 +16,15 @@ From the [latest release](../../releases/latest):
 
 On Mac, open the .dmg and drag **DragShift** into Applications. DragShift lives in the menu bar and has no Dock icon. You can also right-click any file → **Open With → DragShift**.
 
-> **First launch.** Windows SmartScreen may warn because the app isn't code-signed: click **More info → Run anyway**. On Mac, right-click the app → **Open** → **Open** (or go to System Settings → Privacy & Security → **Open Anyway**), because it isn't notarized by Apple yet.
+> **First launch on Windows:** SmartScreen may warn because the app isn't code-signed yet. Click **More info → Run anyway**.
+>
+> **First launch on Mac (until DragShift is notarized by Apple):** macOS says *"Apple could not verify 'DragShift' is free of malware."* This happens with any app that hasn't paid for Apple's notarization; DragShift's code is all public in this repo. To open it:
+> 1. Open DragShift once and click **Done** on the warning.
+> 2. Go to  → **System Settings → Privacy & Security**, scroll down to *"DragShift was blocked…"* and click **Open Anyway**. Enter your password and confirm.
+> 3. That's it. macOS remembers the choice.
+>
+> Or, in Terminal: `xattr -dr com.apple.quarantine /Applications/DragShift.app`
+> (On macOS 15 and later, the old right-click → Open shortcut no longer skips this warning.)
 >
 > **Mac, optional:** allow **Screen Recording** when DragShift asks, so the glass can refract the windows behind it. Without it, the glass shows your wallpaper. Nothing is ever saved or sent.
 
