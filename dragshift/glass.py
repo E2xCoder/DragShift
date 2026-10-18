@@ -1,0 +1,209 @@
+"""Liquid-glass look: frosted blur, specular highlights and an iridescent (rainbow)
+rim. Used by the radial menu and every editor window."""
+from __future__ import annotations
+
+import ctypes
+import sys
+
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QImage, QLinearGradient,
+                           QPainter, QPainterPath, QPen, QPixmap, QRadialGradient)
+
+# Rainbow stops for the iridescent rim (soft, pastel-ish so it reads as "glass").
+IRIDESCENT = ["#ff6b9d", "#ffb36b", "#ffe66b", "#7dffb0", "#6bd5ff", "#8a7bff", "#e07bff", "#ff6b9d"]
+
+TEXT = "#ffffff"
+TEXT_DIM = "rgba(255,255,255,0.68)"
+ACCENT_A = "#ff8a5c"
+ACCENT_B = "#ff4f8b"
+ACCENT_C = "#8a6bff"
+
+
+def iridescent_pen(center: QPointF, width: float, alpha: int = 200, angle: float = 30) -> QPen:
+    g = QConicalGradient(center, angle)
+    n = len(IRIDESCENT) - 1
+    for i, c in enumerate(IRIDESCENT):
+        col = QColor(c)
+        col.setAlpha(alpha)
+        g.setColorAt(i / n, col)
+    return QPen(QBrush(g), width)
+
+
+def iridescent_brush(rect: QRectF, alpha: int = 60) -> QBrush:
+    g = QLinearGradient(rect.topLeft(), rect.bottomRight())
+    n = len(IRIDESCENT) - 1
+    for i, c in enumerate(IRIDESCENT):
+        col = QColor(c)
+        col.setAlpha(alpha)
+        g.setColorAt(i / n, col)
+    return QBrush(g)
+
+
+def blur_pixmap(pm: QPixmap, radius: int = 18) -> QPixmap:
+    """Fast frosted blur: downscale, light box blur via repeated scaling, upscale."""
+    if pm.isNull():
+        return pm
+    w, h = pm.width(), pm.height()
+    f = max(2, radius // 3)
+    small = pm.scaled(max(1, w // f), max(1, h // f), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    small = small.scaled(max(1, w // (f * 2)), max(1, h // (f * 2)), Qt.IgnoreAspectRatio,
+                         Qt.SmoothTransformation)
+    return small.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+
+
+def paint_glass(p: QPainter, path: QPainterPath, backdrop: QPixmap | None = None,
+                backdrop_offset: QPointF = QPointF(0, 0), tint: QColor | None = None,
+                rim: bool = True, rainbow_alpha: int = 170, highlight: float = 1.0) -> None:
+    """Paint a liquid-glass surface filling `path`."""
+    rect = path.boundingRect()
+    p.save()
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setClipPath(path)
+
+    # 1. frosted backdrop (blurred desktop snapshot), slightly magnified = refraction
+    if backdrop is not None and not backdrop.isNull():
+        p.save()
+        c = rect.center()
+        p.translate(c)
+        p.scale(1.04, 1.04)
+        p.translate(-c)
+        p.drawPixmap(backdrop_offset, backdrop)
+        p.restore()
+
+    # 2. tint – keeps white text readable on any wallpaper
+    p.fillPath(path, tint or QColor(28, 24, 40, 105))
+
+    # 3. faint rainbow wash across the body
+    p.fillPath(path, iridescent_brush(rect, 26))
+
+    # 4. top specular sheen
+    sheen = QLinearGradient(rect.topLeft(), QPointF(rect.left(), rect.top() + rect.height() * 0.55))
+    sheen.setColorAt(0.0, QColor(255, 255, 255, int(70 * highlight)))
+    sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
+    p.fillPath(path, sheen)
+
+    # 5. soft caustic glow lower-right
+    glow = QRadialGradient(QPointF(rect.right() - rect.width() * 0.2, rect.bottom() - rect.height() * 0.15),
+                           max(rect.width(), rect.height()) * 0.55)
+    glow.setColorAt(0.0, QColor(255, 255, 255, int(22 * highlight)))
+    glow.setColorAt(1.0, QColor(255, 255, 255, 0))
+    p.fillPath(path, glow)
+    p.restore()
+
+    if rim:
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing)
+        # inner bright edge
+        p.setPen(QPen(QColor(255, 255, 255, 90), 1.0))
+        p.drawPath(path)
+        # iridescent rim
+        p.setPen(iridescent_pen(rect.center(), 1.6, rainbow_alpha))
+        p.drawPath(path)
+        p.restore()
+
+
+# ---------------------------------------------------------------- Qt stylesheet
+QSS = f"""
+* {{ color: {TEXT}; font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; font-size: 10pt; }}
+QWidget#glassRoot {{ background: transparent; }}
+QLabel#title {{ font-size: 11pt; font-weight: 600; }}
+QLabel#dim, QLabel.dim {{ color: {TEXT_DIM}; font-size: 9pt; }}
+QLabel#section {{ color: {TEXT_DIM}; font-size: 8.5pt; font-weight: 600; letter-spacing: 1px; }}
+QPushButton {{
+  background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.28);
+  border-radius: 9px; padding: 6px 14px;
+}}
+QPushButton:hover {{ background: rgba(255,255,255,0.22); }}
+QPushButton:pressed {{ background: rgba(255,255,255,0.08); }}
+QPushButton:checked {{
+  background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(255,138,92,0.85), stop:1 rgba(255,79,139,0.85));
+  border: 1px solid rgba(255,255,255,0.55);
+}}
+QPushButton#primary {{
+  background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 {ACCENT_A}, stop:0.55 {ACCENT_B}, stop:1 {ACCENT_C});
+  border: 1px solid rgba(255,255,255,0.6); font-weight: 600; padding: 7px 18px;
+}}
+QPushButton#primary:hover {{ border: 1px solid #ffffff; }}
+QPushButton#chrome {{ background: transparent; border: none; padding: 2px 8px; font-size: 11pt; border-radius: 6px; }}
+QPushButton#chrome:hover {{ background: rgba(255,80,100,0.6); }}
+QPushButton#swatch {{ border-radius: 12px; padding: 0; min-width: 24px; max-width: 24px; min-height: 24px; max-height: 24px; }}
+QPushButton#swatch:checked {{ border: 2px solid #ffffff; }}
+QSlider::groove:horizontal {{ height: 4px; background: rgba(255,255,255,0.22); border-radius: 2px; }}
+QSlider::sub-page:horizontal {{
+  background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #ff9a6b, stop:0.5 #ff5f9a, stop:1 #8f7bff); border-radius: 2px;
+}}
+QSlider::handle:horizontal {{
+  background: #ffffff; width: 14px; height: 14px; margin: -6px 0; border-radius: 7px;
+  border: 1px solid rgba(0,0,0,0.15);
+}}
+QSpinBox, QLineEdit, QComboBox {{
+  background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 7px; padding: 3px 6px; selection-background-color: {ACCENT_B};
+}}
+QComboBox QAbstractItemView {{ background: #2a2438; border: 1px solid rgba(255,255,255,0.25); }}
+QCheckBox::indicator {{ width: 16px; height: 16px; border-radius: 5px; border: 1px solid rgba(255,255,255,0.5); background: rgba(255,255,255,0.1); }}
+QCheckBox::indicator:checked {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 {ACCENT_A}, stop:1 {ACCENT_B}); }}
+QTableWidget {{ background: rgba(0,0,0,0.12); border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; gridline-color: rgba(255,255,255,0.08); }}
+QHeaderView {{ background: transparent; }}
+QTableCornerButton::section {{ background: transparent; border: none; }}
+QHeaderView::section {{ background: rgba(255,255,255,0.10); border: none; padding: 4px; font-weight: 600; }}
+QScrollBar:vertical {{ background: transparent; width: 8px; }}
+QScrollBar::handle:vertical {{ background: rgba(255,255,255,0.3); border-radius: 4px; min-height: 30px; }}
+QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+QToolTip {{ background: #2a2438; color: white; border: 1px solid rgba(255,255,255,0.3); border-radius: 6px; padding: 4px; }}
+QMenu {{ background: #2a2438; border: 1px solid rgba(255,255,255,0.25); border-radius: 8px; padding: 4px; }}
+QMenu::item {{ padding: 6px 18px; border-radius: 5px; }}
+QMenu::item:selected {{ background: rgba(255,255,255,0.15); }}
+"""
+
+
+# ---------------------------------------------------------------- Windows acrylic
+class _ACCENT(ctypes.Structure):
+    _fields_ = [("AccentState", ctypes.c_int), ("AccentFlags", ctypes.c_int),
+                ("GradientColor", ctypes.c_uint), ("AnimationId", ctypes.c_int)]
+
+
+class _WCAD(ctypes.Structure):
+    _fields_ = [("Attribute", ctypes.c_int), ("Data", ctypes.c_void_p), ("SizeOfData", ctypes.c_size_t)]
+
+
+def enable_acrylic(hwnd: int, tint_abgr: int = 0x40281E28) -> bool:
+    """Real blur-behind for a frameless translucent window (Windows 10/11).
+    Returns False elsewhere so callers can fall back to a painted frost."""
+    if sys.platform != "win32":
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        accent = _ACCENT(4, 2, tint_abgr, 0)  # 4 = ACCENT_ENABLE_ACRYLICBLURBEHIND
+        data = _WCAD(19, ctypes.cast(ctypes.pointer(accent), ctypes.c_void_p), ctypes.sizeof(accent))
+        ok = bool(user32.SetWindowCompositionAttribute(ctypes.c_void_p(hwnd), ctypes.byref(data)))
+        try:  # rounded corners on Windows 11
+            pref = ctypes.c_int(2)  # DWMWCP_ROUND
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(ctypes.c_void_p(hwnd), 33,
+                                                       ctypes.byref(pref), ctypes.sizeof(pref))
+        except Exception:
+            pass
+        return ok
+    except Exception:
+        return False
+
+
+def qimage_from_pil(im) -> QImage:
+    im = im.convert("RGBA")
+    data = im.tobytes("raw", "RGBA")
+    qi = QImage(data, im.width, im.height, im.width * 4, QImage.Format_RGBA8888)
+    return qi.copy()  # detach from the Python buffer
+
+
+def pil_from_qimage(qi: QImage):
+    from PIL import Image
+    qi = qi.convertToFormat(QImage.Format_RGBA8888)
+    ptr = qi.constBits()
+    return Image.frombuffer("RGBA", (qi.width(), qi.height()), bytes(ptr), "raw", "RGBA",
+                            qi.bytesPerLine(), 1).copy()
+
+
+def rounded_rect_path(r: QRectF, radius: float) -> QPainterPath:
+    path = QPainterPath()
+    path.addRoundedRect(r, radius, radius)
+    return path
