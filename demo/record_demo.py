@@ -363,9 +363,13 @@ def main() -> int:
             drag_slider(bg, 3, 0.15)   # angle
         except Exception as e:
             log("slider error", e)
-        sw_buttons = [b for b in bg.descendants(control_type="Button") if not b.window_text()]
+        def is_swatch(c):
+            r = c.rectangle()
+            return 18 <= r.width() <= 34 and 18 <= r.height() <= 34 and not c.window_text().strip()
+        sw_buttons = [c for c in bg.descendants() if is_swatch(c)]
+        sw_buttons.sort(key=lambda c: (c.rectangle().top, c.rectangle().left))
         log("swatches found", len(sw_buttons))
-        for k in (3, 1):
+        for k in (3, 1):  # Aurora, then Prism (rainbow)
             if k < len(sw_buttons):
                 r = sw_buttons[k].rectangle()
                 glide((r.left + r.right) // 2, (r.top + r.bottom) // 2, 0.5)
@@ -378,12 +382,17 @@ def main() -> int:
         # 4) finale: show the results in the folder
         step("All results land in the same folder")
         ex.set_focus()
-        pyautogui.hotkey("ctrl", "shift", "1")  # extra large icons
+        pyautogui.hotkey("ctrl", "shift", "2")  # large icons: everything fits
         time.sleep(1.5)
         glide(sw * 0.25, sh * 0.45, 1.0)
         time.sleep(3.5)
         shot("08_final")
         log("folder now:", sorted(f.name for f in DEMO.iterdir()))
+        res = OUT / "results"
+        res.mkdir(exist_ok=True)
+        import shutil
+        for f in DEMO.iterdir():
+            shutil.copy(f, res / f.name)
     except Exception:
         log("DEMO ERROR\n" + traceback.format_exc())
         shot("zz_error")
