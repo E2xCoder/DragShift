@@ -421,5 +421,9 @@ def inpaint_rects(im, rects, pad: int = 6):
     num = np.asarray(Image.fromarray(np.clip(a * m, 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(radius)), np.float32)
     den = np.asarray(mask.filter(ImageFilter.GaussianBlur(radius)), np.float32)[..., None] / 255
     fill = num / np.maximum(den, 1e-3)
-    out = a * m + fill * (1 - m)
+    fill = np.asarray(Image.fromarray(np.clip(fill, 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(6)), np.float32)
+    # feather the seam: the glass bezel magnifies any hard edge into a visible line
+    soft = np.asarray(mask.filter(ImageFilter.GaussianBlur(12)), np.float32)[..., None] / 255
+    soft = np.minimum(soft, m)  # never let the drag picture bleed back in
+    out = a * soft + fill * (1 - soft)
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
