@@ -598,6 +598,14 @@ def main():
         wk.stop_recording(rec)
         app.kill()
         wk.copy_app_log(OUT / "app_log.txt")
+        try:  # the drag picture must never be baked into the glass
+            log_text = (OUT / "app_log.txt").read_text(encoding="utf-8", errors="replace")
+            n = log_text.count("drag image(s) during capture")
+            RESULTS.append({"name": "Drag picture kept out of the glass", "where": "all",
+                            "status": "PASS" if n > 0 else "FAIL",
+                            "detail": f"hidden during {n} menu captures", "seconds": 0, "t": 0})
+        except Exception as e:
+            wk.log("drag image check failed", e)
         passed = sum(r["status"] == "PASS" for r in RESULTS)
         (OUT / "results.json").write_text(json.dumps(RESULTS, indent=1))
         lines = [f"# DragShift end-to-end test — {passed}/{len(RESULTS)} passed", "",

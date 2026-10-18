@@ -318,3 +318,47 @@ class LiquidBacking(QObject):
     def refresh(self):
         if self.excluded and self.w.isVisible():
             self.capture_at(self.w.frameGeometry())
+
+
+# ---------------------------------------------------------------- drag-image hiding
+class hidden_drag_images:
+    """While dragging, Windows draws a translucent picture of the file under the cursor
+    (window class "SysDragImage"). Hide it for the instant we capture the screen behind
+    the menu, so it doesn't get frozen into the glass, then show it again."""
+
+    CLASSES = ("SysDragImage",)
+
+    def __enter__(self):
+        self.hwnds = []
+        if sys.platform != "win32":
+            return self
+        try:
+            user32 = ctypes.windll.user32
+            found = []
+            WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+            def cb(hwnd, _):
+                buf = ctypes.create_unicode_buffer(64)
+                user32.GetClassNameW(ctypes.c_void_p(hwnd), buf, 64)
+                if buf.value in self.CLASSES and user32.IsWindowVisible(ctypes.c_void_p(hwnd)):
+                    found.append(hwnd)
+                return True
+            user32.EnumWindows(WNDENUMPROC(cb), 0)
+            for h in found:
+                user32.ShowWindow(ctypes.c_void_p(h), 0)  # SW_HIDE
+            self.hwnds = found
+            if found:
+                ctypes.windll.gdi32.GdiFlush()
+                ctypes.windll.dwmapi.DwmFlush()  # wait for the compositor to drop it
+        except Exception:
+            pass
+        return self
+
+    def __exit__(self, *exc):
+        if self.hwnds:
+            try:
+                for h in self.hwnds:
+                    ctypes.windll.user32.ShowWindow(ctypes.c_void_p(h), 8)  # SW_SHOWNA
+            except Exception:
+                pass
+        return False
