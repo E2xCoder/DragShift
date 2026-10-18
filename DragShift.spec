@@ -64,8 +64,8 @@ if IS_MAC:
         },
     )
 elif IS_LINUX:
-    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, strip=True, **common)
-    coll = COLLECT(exe, a.binaries, a.datas, name="dragshift", strip=True, upx=False)
+    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, **common)
+    coll = COLLECT(exe, a.binaries, a.datas, name="dragshift", upx=False)  # no strip: breaks OpenBLAS with Debian 12 binutils
 elif onefile:
     exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], **common)
 else:
