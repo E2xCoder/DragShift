@@ -27,7 +27,7 @@ from e2e_windows import (make_files, img_ok, pdf_pages, v_format, v_pages_to_ima
 
 OUT = ROOT / "e2e_mac_out"
 (OUT / "shots").mkdir(parents=True, exist_ok=True)
-DESK = Path.home() / "Desktop"
+DESK = Path.home() / "DragShiftTest"   # a Finder window on this folder
 LOGF = open(OUT / "log.txt", "w", encoding="utf-8")
 RESULTS: list[dict] = []
 T0 = time.time()
@@ -113,33 +113,46 @@ def press_enter():
 
 
 # ------------------------------------------------------------------ desktop icons
-def unsort_desktop():
-    """Turn off Finder's desktop auto-arrange so icons stay where we put them."""
-    plist = str(Path.home() / "Library/Preferences/com.apple.finder.plist")
-    for cmd in ("Set :DesktopViewSettings:IconViewSettings:arrangeBy none",
-                "Add :DesktopViewSettings:IconViewSettings:arrangeBy string none"):
-        sh(["/usr/libexec/PlistBuddy", "-c", cmd, plist])
-    sh(["defaults", "write", "com.apple.finder", "CreateDesktop", "-bool", "true"])
-    sh(["killall", "Finder"])
-    time.sleep(4)
+WIN = {"left": 60, "top": 60, "right": 640, "bottom": 720}
+
+
+def open_finder_window():
+    DESK.mkdir(exist_ok=True)
+    osa('tell application "Finder" to close every window')
+    osa(f'tell application "Finder" to open POSIX file "{DESK}"')
+    time.sleep(1.5)
+    osa(f"""tell application "Finder"
+        activate
+        set w to front window
+        set current view of w to icon view
+        set toolbar visible of w to false
+        set statusbar visible of w to false
+        set bounds of w to {{{WIN['left']}, {WIN['top']}, {WIN['right']}, {WIN['bottom']}}}
+        set arrangement of icon view options of w to not arranged
+        set icon size of icon view options of w to 64
+    end tell""")
+    time.sleep(1.0)
 
 
 def arrange(names: list[str]):
-    """Place icons in a column at known spots, then read back where Finder put them."""
+    """Place icons in the Finder window at known spots; convert to screen coordinates."""
     for i, n in enumerate(names):
-        osa(f'tell application "Finder" to set position of item "{n}" of desktop to {{110, {120 + i * 120}}}')
+        osa(f'tell application "Finder" to set position of item "{n}" of front window to {{80, {60 + i * 115}}}')
     time.sleep(0.8)
+    b = osa('tell application "Finder" to get bounds of front window')
+    try:
+        WIN["left"], WIN["top"], WIN["right"], WIN["bottom"] = (int(v) for v in b.split(","))
+    except Exception:
+        pass
     pos = {}
     for n in names:
-        out = osa(f'tell application "Finder" to get position of item "{n}" of desktop')
+        out = osa(f'tell application "Finder" to get position of item "{n}" of front window')
         try:
             x, y = (int(v.strip()) for v in out.split(","))
-            if x < 0 or y < 0:
-                raise ValueError(out)
-            pos[n] = (x, y)
+            pos[n] = (WIN["left"] + x, WIN["top"] + 28 + y)   # 28 = title bar
         except Exception:
             log("no position for", n, repr(out))
-    log("finder positions:", pos)
+    log("icon positions (screen):", pos)
     return pos
 
 
@@ -331,9 +344,7 @@ def main():
     # clean desktop + sample files
     for p in DESK.glob("D-*"):
         shutil.rmtree(p) if p.is_dir() else p.unlink()
-    unsort_desktop()
-    osa('tell application "Finder" to close every window')
-    time.sleep(1.5)
+    open_finder_window()
     empty = Image.open(shot("00_empty"))
     make_files(DESK, "D-")
     for p in DESK.glob("D-*"):
@@ -344,7 +355,6 @@ def main():
     wall = Path("/tmp/dragshift_wall.png")
     gradient((1920, 1080), ["#ffb36b", "#ff5f6d", "#c2508f", "#7b8cff"], 160).save(wall)
     osa(f'tell application "System Events" to tell every desktop to set picture to "{wall}"')
-    osa('tell application "Finder" to close every window')
     osa('tell application "System Events" to set visible of every process whose name is not "Finder" to false')
     sh(["defaults", "write", "com.dragshift.DragShift", "welcomed", "-bool", "true"])
     sh(["defaults", "write", "DragShift", "welcomed", "-string", "true"])
