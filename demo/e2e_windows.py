@@ -559,7 +559,7 @@ def main():
         run("Compress to 200 KB", "explorer", ["Photo.jpg"], "Tools", "Compress", v_compress(200_000), drive_compress)
         run("Resize 50%", "explorer", ["Photo.jpg"], "Tools", "Resize",
             v_dims(lambda a, b: b == (a[0] // 2, a[1] // 2)), drive_resize)
-        run("Crop 1:1", "explorer", ["Photo.jpg"], "Tools", "Crop", v_dims(lambda a, b: b[0] == b[1]), drive_crop)
+        run("Crop 1:1", "explorer", ["Photo.jpg"], "Tools", "Crop", v_dims(lambda a, b: b[0] == b[1] == min(a)), drive_crop)
         run("Edit: auto + rotate", "explorer", ["Photo.jpg"], "Tools", "Edit",
             v_dims(lambda a, b: b == (a[1], a[0])), drive_edit)
         run("Annotate", "explorer", ["Photo.jpg"], "Tools", "Annotate", v_exists, drive_annotate)
