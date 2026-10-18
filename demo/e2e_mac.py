@@ -114,19 +114,57 @@ def press_enter():
 
 # ------------------------------------------------------------------ desktop icons
 def arrange(names: list[str]):
-    """Put icons in a column on the desktop at known positions (AppleScript)."""
+    """Ask Finder where each desktop icon is (the desktop may be auto-sorted, so we don't
+    move them). Finder reports the icon position; the clickable icon image sits just
+    below/right of it, so we aim at the image centre."""
+    time.sleep(0.8)
     pos = {}
-    for i, n in enumerate(names):
-        x, y = 120, 140 + i * 110
-        osa(f'tell application "Finder" to set position of item "{n}" of desktop to {{{x}, {y}}}')
-        pos[n] = (x, y)
-    time.sleep(1.0)
+    for n in names:
+        out = osa(f'tell application "Finder" to get position of item "{n}" of desktop')
+        try:
+            x, y = (int(v.strip()) for v in out.split(","))
+            pos[n] = (x, y)
+        except Exception:
+            log("no position for", n, repr(out))
+    log("finder positions:", pos)
     return pos
 
 
+ICON_OFFSET = [0, 0]   # calibrated at start-up from a screenshot
+
+
 def icon_center(name: str, pos: dict) -> tuple[int, int]:
-    """Finder reports desktop icon positions as the icon's centre (verified via screenshot diff)."""
-    return pos[name]
+    x, y = pos[name]
+    return x + ICON_OFFSET[0], y + ICON_OFFSET[1]
+
+
+def calibrate(pos: dict, empty: Image.Image, full: Image.Image):
+    """Find where icons really are relative to Finder's reported positions: diff a screenshot
+    of the bare desktop against one with the icons, and take the blob nearest each position."""
+    a, b = empty.convert("L"), full.convert("L")
+    k = a.width / screen_size()[0]                      # screenshot px per point (Retina = 2)
+    diff = ImageChops.difference(a, b).point(lambda v: 255 if v > 40 else 0)
+    import numpy as np
+    m = np.asarray(diff) > 0
+    offs = []
+    for n, (x, y) in pos.items():
+        # search a window around the reported point for the icon's changed pixels
+        x0, y0 = int((x - 70) * k), int((y - 70) * k)
+        x1, y1 = int((x + 70) * k), int((y + 70) * k)
+        sub = m[max(0, y0):y1, max(0, x0):x1]
+        ys, xs = np.nonzero(sub)
+        if len(xs) < 50:
+            continue
+        # icon image = upper part of the blob (label text is below it)
+        top = ys.min()
+        img_rows = ys < top + (ys.max() - top) * 0.6
+        cx = (xs[img_rows].mean() + max(0, x0)) / k
+        cy = (ys[img_rows].mean() + max(0, y0)) / k
+        offs.append((cx - x, cy - y))
+    if offs:
+        ICON_OFFSET[0] = int(sum(o[0] for o in offs) / len(offs))
+        ICON_OFFSET[1] = int(sum(o[1] for o in offs) / len(offs))
+    log("icon offset calibrated:", ICON_OFFSET, "from", len(offs), "icons")
 
 
 # ------------------------------------------------------------------ scenario
@@ -280,6 +318,9 @@ def main():
     # clean desktop + sample files
     for p in DESK.glob("D-*"):
         shutil.rmtree(p) if p.is_dir() else p.unlink()
+    osa('tell application "Finder" to close every window')
+    time.sleep(1.5)
+    empty = Image.open(shot("00_empty"))
     make_files(DESK, "D-")
     for p in DESK.glob("D-*"):
         if p.name not in SOURCES:
@@ -297,14 +338,23 @@ def main():
     app = subprocess.Popen([sys.executable, "-m", "dragshift", "--quiet"], cwd=str(ROOT), env=env)
     time.sleep(6)
     POS = arrange(SOURCES)
-    shot("00_desktop")
+    full = Image.open(shot("00_desktop"))
+    calibrate(POS, empty, full)
+    # debug image: where we will grab each icon
+    dbg = full.convert("RGB")
+    d = ImageDraw.Draw(dbg)
+    k = dbg.width / screen_size()[0]
+    for n in POS:
+        cx, cy = icon_center(n, POS)
+        d.ellipse((cx * k - 8, cy * k - 8, cx * k + 8, cy * k + 8), outline=(0, 255, 0), width=3)
+    dbg.save(OUT / "shots" / "00_targets.png")
 
     # screen recording (needs the runner's Screen Recording grant; skipped if unavailable)
     rec = None
     try:
         import imageio_ffmpeg
         rec = subprocess.Popen([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-f", "avfoundation", "-framerate", "30",
-                                "-capture_cursor", "1", "-i", "1:none", "-c:v", "libx264", "-preset", "veryfast",
+                                "-capture_cursor", "1", "-i", "Capture screen 0:none", "-c:v", "libx264", "-preset", "veryfast",
                                 "-crf", "23", "-pix_fmt", "yuv420p", str(OUT / "e2e_mac.mp4")],
                                stdin=subprocess.PIPE, stdout=open(OUT / "ffmpeg.txt", "w"), stderr=subprocess.STDOUT)
         time.sleep(2)
