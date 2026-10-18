@@ -336,6 +336,7 @@ class hidden_drag_images:
         self.point = point
         self.hwnds: list[int] = []
         self.info: list[str] = []
+        self.rects: list[tuple[int, int, int, int]] = []   # screen px, for inpainting
 
     def __enter__(self):
         if sys.platform != "win32":
@@ -369,6 +370,7 @@ class hidden_drag_images:
                 drag_like = (ex & self.WS_EX_LAYERED) and (ex & self.WS_EX_TRANSPARENT)
                 if buf.value in self.CLASSES or drag_like:
                     found.append(hwnd)
+                    self.rects.append((r.left, r.top, r.right, r.bottom))
                     self.info.append(f"{buf.value} ex=0x{ex & 0xffffffff:08x} {r.right - r.left}x{r.bottom - r.top}")
                 return True
             user32.EnumWindows(WNDENUMPROC(cb), 0)
@@ -391,3 +393,33 @@ class hidden_drag_images:
             except Exception:
                 pass
         return False
+
+
+def inpaint_rects(im, rects, pad: int = 6):
+    """Fill rectangles of a PIL image from their surroundings (normalised convolution):
+    a smooth, colour-matched patch — invisible once refracted and blurred by the glass."""
+    import numpy as np
+    from PIL import Image, ImageFilter
+    if not rects:
+        return im
+    rgb = im.convert("RGB")
+    w, h = rgb.size
+    mask = Image.new("L", (w, h), 255)
+    from PIL import ImageDraw
+    d = ImageDraw.Draw(mask)
+    any_hit = False
+    for (x0, y0, x1, y1) in rects:
+        x0, y0, x1, y1 = max(0, x0 - pad), max(0, y0 - pad), min(w, x1 + pad), min(h, y1 + pad)
+        if x1 > x0 and y1 > y0:
+            d.rectangle((x0, y0, x1, y1), fill=0)
+            any_hit = True
+    if not any_hit:
+        return im
+    a = np.asarray(rgb, np.float32)
+    m = np.asarray(mask, np.float32)[..., None] / 255
+    radius = 28
+    num = np.asarray(Image.fromarray(np.clip(a * m, 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(radius)), np.float32)
+    den = np.asarray(mask.filter(ImageFilter.GaussianBlur(radius)), np.float32)[..., None] / 255
+    fill = num / np.maximum(den, 1e-3)
+    out = a * m + fill * (1 - m)
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))

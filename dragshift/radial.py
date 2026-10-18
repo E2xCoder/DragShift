@@ -149,9 +149,17 @@ class RadialMenu(QWidget):
                 print(f"menu: hid {len(hid.hwnds)} drag image(s) during capture: {'; '.join(hid.info)}", flush=True)
             elif hid.info:
                 print(f"menu: drag-image sweep: {'; '.join(hid.info)}", flush=True)
-            self.backdrop = glass.blur_pixmap(shot, 24)
-            self._raw_backdrop = glass.pil_from_qimage(
+            raw = glass.pil_from_qimage(
                 shot.toImage().scaled(SIZE, SIZE, Qt.IgnoreAspectRatio, Qt.SmoothTransformation))
+            if hid.rects:
+                # belt and braces: erase where the drag picture was, in case it was captured anyway
+                k = SIZE / max(1, shot.width())
+                local = [(int((x0 - tl.x()) * k), int((y0 - tl.y()) * k), int((x1 - tl.x()) * k), int((y1 - tl.y()) * k))
+                         for (x0, y0, x1, y1) in hid.rects]
+                raw = glass.inpaint_rects(raw, local)
+                shot = QPixmap.fromImage(glass.qimage_from_pil(raw))
+            self._raw_backdrop = raw
+            self.backdrop = glass.blur_pixmap(shot, 24)
         except Exception:
             self.backdrop = None
             self._raw_backdrop = None
