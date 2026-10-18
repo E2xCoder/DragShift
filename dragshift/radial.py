@@ -66,6 +66,7 @@ class RadialMenu(QWidget):
         self.hub_text = ""
         self.backdrop: QPixmap | None = None
         self.got_drag = False
+        self.hub_armed = False
         self.click_mode = False  # opened from tray/menu instead of a drag
         self._t = 1.0            # pop-in animation 0..1
         self._swap = 1.0         # ring-swap animation 0..1
@@ -95,6 +96,7 @@ class RadialMenu(QWidget):
         self.move(tl)
         self.hover = -1
         self.got_drag = False
+        self.hub_armed = False  # drags start on the hub; don't flip until they leave it
         self.click_mode = paths is not None
         if paths is not None:
             self._load(paths)
@@ -164,7 +166,9 @@ class RadialMenu(QWidget):
     def _set_hover(self, h: int):
         if h != self.hover:
             self.hover = h
-            if h == -2 and len(self.ring_names) > 1:
+            if h >= 0 or h == -1:
+                self.hub_armed = True  # left the hub at least once
+            if h == -2 and self.hub_armed and len(self.ring_names) > 1:
                 self.hub_timer.start()
             else:
                 self.hub_timer.stop()

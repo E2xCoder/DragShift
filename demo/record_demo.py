@@ -220,8 +220,12 @@ def drop():
 
 
 def click_button(win, title: str, pause=0.6):
-    b = win.child_window(title=title, control_type="Button")
-    b.wait("exists visible", timeout=8)
+    b = win.child_window(title=title, found_index=0)
+    try:
+        b.wait("exists", timeout=6)
+    except Exception:
+        log("controls:", [(c.element_info.control_type, c.window_text()) for c in win.descendants()][:80])
+        raise
     r = b.rectangle()
     glide((r.left + r.right) // 2, (r.top + r.bottom) // 2, 0.5)
     time.sleep(0.15)
