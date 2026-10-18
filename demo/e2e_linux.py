@@ -107,8 +107,9 @@ def petal_xy(c, n, i, r=R_PETAL):
 
 
 # ------------------------------------------------------------------ Thunar
-def open_folder(folder: Path, n_icons: int) -> list[tuple[int, int]]:
-    """Show `folder` in a fresh Thunar window at a known place; find its icons on screen."""
+def open_folder(folder: Path, files: list[str]) -> list[tuple[int, int]]:
+    """Show the (empty) folder in a fresh Thunar window at a known place, copy the files in, and
+    locate their icons by diffing screenshots before/after (independent of theme and version)."""
     sh("thunar", "--quit")
     time.sleep(0.6)
     subprocess.Popen(["thunar", str(folder)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -124,32 +125,39 @@ def open_folder(folder: Path, n_icons: int) -> list[tuple[int, int]]:
     xdo("windowmove", wid, WIN[0], WIN[1])
     xdo("windowsize", wid, WIN[2], WIN[3])
     xdo("windowactivate", "--sync", wid)
+    xdo("mousemove", 900, 700)
     time.sleep(1.2)
-    return find_icons(grab(), n_icons)
+    empty = grab()
+    for f in files:
+        shutil.copy(BASE / "src" / f, folder / f)
+    time.sleep(2.0)                       # Thunar picks up new files + makes thumbnails
+    return find_icons(empty, grab(), len(files))
 
 
-def find_icons(img: Image.Image, n: int) -> list[tuple[int, int]]:
-    """Icon centres in Thunar's icon view: the view is the white area right of the side pane;
-    icons are the coloured blobs in its first row, label text below them is ignored."""
+def find_icons(empty: Image.Image, full: Image.Image, n: int) -> list[tuple[int, int]]:
     x0, y0, w, h = WIN
-    a = np.asarray(img.convert("RGB")).astype(int)
-    # the view: the big near-white region in the window's right part
-    view = a[y0 + 120:y0 + h - 40, x0 + 190:x0 + w - 10]
-    bg = np.median(view.reshape(-1, 3), axis=0)
-    ink = np.abs(view - bg).sum(axis=2) > 90
-    rows = np.nonzero(ink.sum(axis=1) > 6)[0]
-    if not len(rows):
-        raise AssertionError("no icons found in the Thunar window")
-    top = rows[0]
-    band = ink[top:top + 44]                     # upper part of the first icon row
-    cols = np.nonzero(band.sum(axis=0) > 2)[0]
+    box = (x0, y0 + 30, x0 + w, y0 + h)
+    a = np.asarray(empty.crop(box).convert("L")).astype(int)
+    b = np.asarray(full.crop(box).convert("L")).astype(int)
+    m = np.abs(a - b) > 30
+    # ignore the status bar text that changes too ("1 file: …")
+    m[-40:] = False
+    cols = np.nonzero(m.sum(axis=0) > 3)[0]
+    if not len(cols):
+        raise AssertionError("no icons appeared in the Thunar window")
     groups, start = [], cols[0]
     for c0, c1 in zip(cols, cols[1:]):
-        if c1 - c0 > 12:
+        if c1 - c0 > 10:
             groups.append((start, c0))
             start = c1
     groups.append((start, cols[-1]))
-    centres = [(int(x0 + 190 + (g0 + g1) / 2), int(y0 + 120 + top + 20)) for g0, g1 in groups]
+    centres = []
+    for g0, g1 in groups:
+        ys = np.nonzero(m[:, g0:g1 + 1].any(axis=1))[0]
+        if len(ys) < 10:
+            continue
+        top, bot = ys.min(), ys.max()
+        centres.append((int(box[0] + (g0 + g1) / 2), int(box[1] + top + (bot - top) * 0.3)))
     if len(centres) < n:
         raise AssertionError(f"found {len(centres)} icons, expected {n}")
     return centres[:n]
@@ -188,15 +196,13 @@ def run(name, files, ring, label, verify, after_drop=None):
     k = len(RESULTS) + 1
     folder = BASE / f"{k:02d}"
     folder.mkdir(parents=True, exist_ok=True)
-    for f in files:
-        shutil.copy(BASE / "src" / f, folder / f)
     srcs = [str(folder / f) for f in sorted(files)]
     tag = f"{k:02d}_{''.join(ch if ch.isalnum() else '_' for ch in name)}"
     t0 = time.time()
     status, msg = "PASS", ""
     try:
+        icons = open_folder(folder, sorted(files))
         ring_i, idx, n = ring_index(srcs, ring, label)
-        icons = open_folder(folder, len(files))
         before = snapshot(folder)
         if len(files) > 1:          # select all with Ctrl-click, then drag the last
             for j, (x, y) in enumerate(icons):
@@ -300,11 +306,10 @@ def open_with_test():
     folder = BASE / f"{k:02d}"
     folder.mkdir(parents=True, exist_ok=True)
     src = folder / "D-Photo.jpg"
-    shutil.copy(BASE / "src" / "D-Photo.jpg", src)
     t0 = time.time()
     status, msg = "PASS", ""
     try:
-        open_folder(folder, 1)
+        open_folder(folder, ["D-Photo.jpg"])
         before = snapshot(folder)
         xdo("mousemove", 640, 400)
         subprocess.Popen(CMD + [str(src)])          # what the .desktop entry's Exec runs

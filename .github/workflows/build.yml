@@ -198,9 +198,13 @@ jobs:
 
       - name: Python environment
         run: |
-          python3 -m venv /opt/venv
-          /opt/venv/bin/pip install -q --upgrade pip
-          /opt/venv/bin/pip install -q -r requirements.txt pyinstaller pytest
+          # Python 3.12 (portable build via uv): Debian 12's 3.11 hits a C-extension refcount bug
+          # on None that is harmless on 3.12+ (None is immortal there)
+          python3 -m venv /opt/uv && /opt/uv/bin/pip install -q uv
+          /opt/uv/bin/uv python install 3.12
+          /opt/uv/bin/uv venv -p 3.12 /opt/venv
+          VIRTUAL_ENV=/opt/venv /opt/uv/bin/uv pip install -q -r requirements.txt pyinstaller pytest
+          /opt/venv/bin/python --version
 
       - name: Run tests
         env:
@@ -248,9 +252,9 @@ jobs:
           sleep 2
           eval $(dbus-launch --sh-syntax)
           /opt/venv/bin/python -c "from dragshift.imaging import gradient; gradient((1280, 800), ['#ffb36b', '#ff5f6d', '#c2508f', '#7b8cff'], 160).save('/tmp/wall.png')"
-          feh --no-fehbg --bg-fill /tmp/wall.png
           xfwm4 --compositor=off >/tmp/xfwm4.log 2>&1 &
           sleep 2
+          feh --no-fehbg --bg-fill /tmp/wall.png
           /opt/venv/bin/python demo/e2e_linux.py || { tail -15 e2e_linux_out/log.txt | sed 's/%/%25/g' | while IFS= read -r l; do echo "::error title=e2e::$l"; done; exit 1; }
 
       - name: Summary
