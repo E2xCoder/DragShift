@@ -167,6 +167,9 @@ class RadialMenu(QWidget):
         self.raise_()
         self.anim.start()
         self.frame.start()
+        if self.click_mode:
+            # behave like a popup: a click anywhere outside dismisses it
+            QTimer.singleShot(0, self.grabMouse)
 
     def close_menu(self):
         if self.isVisible():
@@ -177,6 +180,8 @@ class RadialMenu(QWidget):
 
     def hideEvent(self, e):
         self.frame.stop()
+        if QWidget.mouseGrabber() is self:
+            self.releaseMouse()
         super().hideEvent(e)
 
     def _render(self, n: int):

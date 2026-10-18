@@ -366,14 +366,32 @@ class CropWindow(ToolWindow):
 
     def apply(self):
         s, k, rot, path = self.view.sel, self.view.k, self.rot, self.path
+        fw, fh = (self.full_size[1], self.full_size[0]) if rot % 180 else self.full_size
         x0, y0 = round(s.left() * k), round(s.top() * k)
         w, h = round(s.width() * k), round(s.height() * k)
-        if self.view.ratio:  # enforce the exact ratio after scaling (no 1600×1599)
-            h = round(w / self.view.ratio)
-            fw, fh = (self.full_size[1], self.full_size[0]) if rot % 180 else self.full_size
+        # preview → full-size rounding: snap to the image edges when within 3 px
+        if x0 <= 3:
+            w, x0 = w + x0, 0
+        if y0 <= 3:
+            h, y0 = h + y0, 0
+        snap_w = abs(x0 + w - fw) <= 3
+        snap_h = abs(y0 + h - fh) <= 3
+        if snap_w:
+            w = fw - x0
+        if snap_h:
+            h = fh - y0
+        if self.view.ratio:  # exact ratio (no 1600×1599)
+            r = self.view.ratio
+            if snap_h and not snap_w:
+                w = round(h * r)
+            else:
+                h = round(w / r)
             if y0 + h > fh:
                 h = fh - y0
-                w = round(h * self.view.ratio)
+                w = round(h * r)
+            if x0 + w > fw:
+                w = fw - x0
+                h = round(w / r)
         box = (x0, y0, x0 + w, y0 + h)
 
         def work():
