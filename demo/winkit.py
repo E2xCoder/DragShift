@@ -16,7 +16,7 @@ from PIL import ImageGrab
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-user32 = ctypes.windll.user32
+user32 = ctypes.windll.user32 if sys.platform == "win32" else None
 try:  # the Windows console is cp1252; never let a "→" crash a run
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -126,7 +126,7 @@ def copy_app_log(dest: Path):
 
 
 def desktop_dir() -> Path:
-    return Path(os.environ["USERPROFILE"]) / "Desktop"
+    return Path(os.environ.get("USERPROFILE") or Path.home()) / "Desktop"
 
 
 def start_app(extra_env: dict | None = None) -> subprocess.Popen:
