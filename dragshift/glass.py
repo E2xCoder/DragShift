@@ -3,6 +3,7 @@ rim. Used by the radial menu and every editor window."""
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 
 from PySide6.QtCore import QPointF, QRectF, Qt
@@ -322,26 +323,53 @@ class LiquidBacking(QObject):
 
 # ---------------------------------------------------------------- drag-image hiding
 class hidden_drag_images:
-    """While dragging, Windows draws a translucent picture of the file under the cursor
-    (window class "SysDragImage"). Hide it for the instant we capture the screen behind
-    the menu, so it doesn't get frozen into the glass, then show it again."""
+    """While dragging, Windows draws a translucent picture of the file under the cursor.
+    Hide it for the instant we capture the screen behind the menu, so it doesn't get frozen
+    into the glass, then show it again. We hide every visible top-level window of another
+    process that sits under the cursor and is layered + click-through (that is what drag
+    images are), plus the known drag-image classes."""
 
-    CLASSES = ("SysDragImage",)
+    CLASSES = ("SysDragImage", "DragImageWindow", "DragWindow")
+    WS_EX_LAYERED, WS_EX_TRANSPARENT = 0x00080000, 0x00000020
+
+    def __init__(self, point=None):
+        self.point = point
+        self.hwnds: list[int] = []
+        self.info: list[str] = []
 
     def __enter__(self):
-        self.hwnds = []
         if sys.platform != "win32":
             return self
         try:
+            from ctypes import wintypes
             user32 = ctypes.windll.user32
+            user32.GetWindowLongW.restype = ctypes.c_long
+            pt = wintypes.POINT()
+            user32.GetCursorPos(ctypes.byref(pt))
+            mypid = os.getpid()
             found = []
             WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
 
             def cb(hwnd, _):
+                h = ctypes.c_void_p(hwnd)
+                if not user32.IsWindowVisible(h):
+                    return True
+                r = wintypes.RECT()
+                user32.GetWindowRect(h, ctypes.byref(r))
+                near = r.left - 40 <= pt.x <= r.right + 40 and r.top - 40 <= pt.y <= r.bottom + 40
+                if not near or (r.right - r.left) > 900 or (r.bottom - r.top) > 900:
+                    return True
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(h, ctypes.byref(pid))
+                if pid.value == mypid:
+                    return True
                 buf = ctypes.create_unicode_buffer(64)
-                user32.GetClassNameW(ctypes.c_void_p(hwnd), buf, 64)
-                if buf.value in self.CLASSES and user32.IsWindowVisible(ctypes.c_void_p(hwnd)):
+                user32.GetClassNameW(h, buf, 64)
+                ex = user32.GetWindowLongW(h, -20)  # GWL_EXSTYLE
+                drag_like = (ex & self.WS_EX_LAYERED) and (ex & self.WS_EX_TRANSPARENT)
+                if buf.value in self.CLASSES or drag_like:
                     found.append(hwnd)
+                    self.info.append(f"{buf.value} ex=0x{ex & 0xffffffff:08x} {r.right - r.left}x{r.bottom - r.top}")
                 return True
             user32.EnumWindows(WNDENUMPROC(cb), 0)
             for h in found:
@@ -349,9 +377,10 @@ class hidden_drag_images:
             self.hwnds = found
             if found:
                 ctypes.windll.gdi32.GdiFlush()
-                ctypes.windll.dwmapi.DwmFlush()  # wait for the compositor to drop it
-        except Exception:
-            pass
+                ctypes.windll.dwmapi.DwmFlush()  # wait for the compositor to drop them
+                ctypes.windll.dwmapi.DwmFlush()
+        except Exception as e:
+            self.info.append(f"error: {e}")
         return self
 
     def __exit__(self, *exc):

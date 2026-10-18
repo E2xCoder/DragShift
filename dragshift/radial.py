@@ -146,7 +146,9 @@ class RadialMenu(QWidget):
             with glass.hidden_drag_images() as hid:
                 shot = scr.grabWindow(0, tl.x() - g.left(), tl.y() - g.top(), SIZE, SIZE)
             if hid.hwnds:
-                print(f"menu: hid {len(hid.hwnds)} drag image(s) during capture", flush=True)
+                print(f"menu: hid {len(hid.hwnds)} drag image(s) during capture: {'; '.join(hid.info)}", flush=True)
+            elif hid.info:
+                print(f"menu: drag-image sweep: {'; '.join(hid.info)}", flush=True)
             self.backdrop = glass.blur_pixmap(shot, 24)
             self._raw_backdrop = glass.pil_from_qimage(
                 shot.toImage().scaled(SIZE, SIZE, Qt.IgnoreAspectRatio, Qt.SmoothTransformation))
