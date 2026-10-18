@@ -12,7 +12,7 @@ a = Analysis(
     hiddenimports=["win32com.client", "PySide6.QtNetwork", "AppKit", "Quartz", "objc"] + heif_hidden,
     excludes=["tkinter", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtQml",
               "PySide6.QtQuick", "PySide6.Qt3DCore", "PySide6.QtMultimedia", "PySide6.QtCharts",
-              "PySide6.QtDataVisualization", "PySide6.QtPdf", "PySide6.QtSql", "PySide6.QtTest",
+              "PySide6.QtDataVisualization", "PySide6.QtPdf", "pandas", "yaml", "PySide6.QtSql", "PySide6.QtTest",
               "PySide6.QtOpenGL", "PySide6.QtSvgWidgets", "PySide6.QtDesigner", "matplotlib", "scipy"],
 )
 
@@ -20,7 +20,8 @@ DROP = ("Qt6Quick", "Qt6Qml", "Qt6Pdf", "Qt6WebEngine", "Qt63D", "Qt6Multimedia"
         "Qt6VirtualKeyboard", "Qt6Designer", "Qt6ShaderTools", "Qt6Sql", "Qt6Test", "opengl32sw",
         "Qt6OpenGL", "Qt6DataVisualization", "Qt6Positioning", "Qt6Sensors", "Qt6SerialPort",
         "Qt6Bluetooth", "Qt6Nfc", "Qt6RemoteObjects", "Qt6Scxml", "Qt6SpatialAudio", "Qt6TextToSpeech",
-        "Qt6WebChannel", "Qt6WebSockets", "Qt6Svg", "qtquick", "qml")
+        "Qt6WebChannel", "Qt6WebSockets", "Qt6Svg", "qtquick", "qml",
+        "libgtk-3", "libgdk-3", "libqgtk3", "libatk-")
 a.binaries = [b for b in a.binaries if not any(d.lower() in b[0].lower() for d in DROP)]
 a.datas = [d for d in a.datas if "translations" not in d[0].replace("\\", "/")]
 
@@ -28,8 +29,11 @@ pyz = PYZ(a.pure)
 import sys
 IS_MAC = sys.platform == "darwin"
 common = dict(name="DragShift", console=False, upx=False)
+IS_LINUX = sys.platform.startswith("linux")
 if IS_MAC:
     common.update(icon="dragshift/assets/dragshift.icns")
+elif IS_LINUX:
+    common.update(name="dragshift")       # icon comes from the .desktop file / hicolor theme
 else:
     common.update(icon="dragshift/assets/dragshift.ico", version="installer/version_info.txt")
 
@@ -59,6 +63,9 @@ if IS_MAC:
             }],
         },
     )
+elif IS_LINUX:
+    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, strip=True, **common)
+    coll = COLLECT(exe, a.binaries, a.datas, name="dragshift", strip=True, upx=False)
 elif onefile:
     exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], **common)
 else:

@@ -448,3 +448,33 @@ def inpaint_rects(im, rects, pad: int = 6):
     soft = np.minimum(soft, m)  # never let the drag picture bleed back in
     out = a * soft + fill * (1 - soft)
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+
+
+# ---------------------------------------------------------------- no-compositor mode (XFCE etc.)
+_NO_COMP = None
+
+
+def no_compositor() -> bool:
+    """Linux/X11 without a compositing manager: translucency would render black, so glass
+    surfaces are cut to their exact shape with a window mask instead (XShape)."""
+    global _NO_COMP
+    if _NO_COMP is None:
+        _NO_COMP = False
+        if sys.platform.startswith("linux") and not os.environ.get("QT_QPA_PLATFORM", "").startswith("offscreen"):
+            try:
+                from . import platform_linux
+                _NO_COMP = not platform_linux.composited()
+            except Exception:
+                _NO_COMP = False
+    return _NO_COMP
+
+
+def apply_shape(widget, path: QPainterPath):
+    """Clip a top-level window to `path` when there's no compositor (no-op otherwise)."""
+    if not no_compositor():
+        return
+    from PySide6.QtGui import QRegion
+    region = QRegion()
+    for poly in path.simplified().toFillPolygons():   # one polygon per separate piece
+        region = region.united(QRegion(poly.toPolygon()))
+    widget.setMask(region)

@@ -32,7 +32,9 @@ def reveal(path: str | Path):
     elif sys.platform == "darwin":
         subprocess.Popen(["open", "-R", path])
     else:
-        subprocess.Popen(["xdg-open", str(Path(path).parent)])
+        from . import platform_linux
+        if not platform_linux.reveal(path):
+            subprocess.Popen(["xdg-open", str(Path(path).parent)])
 
 
 def open_file(path: str | Path):
@@ -134,6 +136,7 @@ class ToastCard(QWidget):
 
     def appear(self, rect: QRect):
         self.setGeometry(rect)
+        glass.apply_shape(self, glass.rounded_rect_path(QRectF(0, 0, W, H), 20))
         self.liquid.capture_at(rect)
         self.setWindowOpacity(0.0)
         self.show()
@@ -206,7 +209,7 @@ class ToastCard(QWidget):
             self.result = None
             self.thumb = None
             self.good = ""
-            bin_name = "Trash" if sys.platform == "darwin" else "Recycle Bin"
+            bin_name = "Recycle Bin" if sys.platform == "win32" else "Trash"
             self.info("Undone", f"Moved {n} file{'s' if n != 1 else ''} to the {bin_name}", 2500)
 
     # ------------------------------------------------------------ paint

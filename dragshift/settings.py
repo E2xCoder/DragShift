@@ -13,6 +13,7 @@ from .window import GlassWindow
 
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
+IS_LINUX = sys.platform.startswith("linux")
 APP = "DragShift"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -58,6 +59,9 @@ def launch_command() -> str:
 
 
 def autostart_enabled() -> bool:
+    if IS_LINUX:
+        from . import platform_linux
+        return platform_linux.autostart_enabled()
     if IS_MAC:
         from . import platform_mac
         return platform_mac.autostart_enabled()
@@ -73,6 +77,10 @@ def autostart_enabled() -> bool:
 
 
 def set_autostart(on: bool):
+    if IS_LINUX:
+        from . import platform_linux
+        platform_linux.set_autostart(on)
+        return
     if IS_MAC:
         from . import platform_mac
         platform_mac.set_autostart(on)
@@ -151,7 +159,7 @@ class SettingsWindow(GlassWindow):
         grid.addWidget(self.dpi, r, 1)
         r += 1
 
-        if IS_WIN or IS_MAC:
+        if IS_WIN or IS_MAC or IS_LINUX:
             self.auto = QCheckBox("Start DragShift with Windows" if IS_WIN else "Open DragShift at login")
             self.auto.setChecked(autostart_enabled())
             self.auto.toggled.connect(set_autostart)
@@ -188,7 +196,8 @@ class WelcomeWindow(GlassWindow):
         super().__init__("Welcome to DragShift", size=(560, 430))
         self.s = settings
         steps = [
-            ("1", "Start dragging any file", "in Finder or on the desktop" if IS_MAC else "in File Explorer or on the desktop"),
+            ("1", "Start dragging any file", "in Finder or on the desktop" if IS_MAC else
+             "in your file manager (Thunar, Nautilus…)" if IS_LINUX else "in File Explorer or on the desktop"),
             ("2", f"Press {trigger_label}", "the glass menu opens right under your cursor"),
             ("3", "Drop it on a slice", "the result is saved next to the original"),
             ("⇄", f"Tap {trigger_label} again", "to switch between Convert and Tools"),
@@ -224,8 +233,16 @@ class WelcomeWindow(GlassWindow):
                 b = QPushButton("Allow Screen Recording…")
                 b.clicked.connect(platform_mac.request_screen_recording)
                 self.body.addWidget(b, 0, Qt.AlignLeft)
+        if IS_LINUX:
+            from . import platform_linux
+            if platform_linux.is_wayland():
+                note = QLabel("You're on a Wayland session: the Shift-while-dragging trigger needs X11 (e.g. XFCE). "
+                              "Right-click a file → Open With → DragShift still works.")
+                note.setObjectName("warn")
+                note.setWordWrap(True)
+                self.body.addWidget(note)
         foot = QHBoxLayout()
-        if IS_WIN or IS_MAC:
+        if IS_WIN or IS_MAC or IS_LINUX:
             self.auto = QCheckBox("Start with Windows" if IS_WIN else "Open at login")
             self.auto.setChecked(True)
             foot.addWidget(self.auto)
@@ -238,6 +255,6 @@ class WelcomeWindow(GlassWindow):
 
     def _done(self):
         self.s.set("welcomed", True)
-        if IS_WIN or IS_MAC:
+        if IS_WIN or IS_MAC or IS_LINUX:
             set_autostart(self.auto.isChecked())
         self.close()

@@ -38,6 +38,10 @@ class DragShiftWatcher(QObject):
         if sys.platform == "darwin":
             from . import platform_mac
             self._mac = platform_mac if platform_mac.OK else None
+        elif sys.platform.startswith("linux"):
+            from . import platform_linux
+            # same interface as platform_mac: left_button_down / key_down / escape_down
+            self._mac = platform_linux if platform_linux.available() else None
         self.timer = QTimer(self, interval=15, timeout=self._tick)
 
     def set_key(self, name: str):

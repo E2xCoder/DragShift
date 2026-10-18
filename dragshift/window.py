@@ -91,6 +91,7 @@ class GlassWindow(QWidget):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        glass.apply_shape(self, glass.rounded_rect_path(QRectF(self.rect()), self.radius))
         self._stale()
 
     def _stale(self):

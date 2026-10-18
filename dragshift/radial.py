@@ -166,6 +166,10 @@ class RadialMenu(QWidget):
                     print(f"menu: drag-image sweep: {'; '.join(hid.info)}", flush=True)
                 raw = glass.pil_from_qimage(
                     shot.toImage().scaled(SIZE, SIZE, Qt.IgnoreAspectRatio, Qt.SmoothTransformation))
+                if sys.platform.startswith("linux") and paths is None:
+                    # X11 drag icons (Thunar/GTK) sit on the cursor: erase that patch
+                    cx, cy = pos.x() - tl.x(), pos.y() - tl.y()
+                    hid.rects = [(pos.x() - 60, pos.y() - 60, pos.x() + 60, pos.y() + 60)]
                 if hid.rects:
                     # belt and braces: erase where the drag picture was, in case it was captured anyway
                     k = SIZE / max(1, shot.width())
@@ -191,6 +195,7 @@ class RadialMenu(QWidget):
             for n in (4, 7):  # most common rings: render speculatively
                 self._render(n)
         self._t = 0.0
+        self._shape()
         self.show()
         self.raise_()
         self.anim.start()
@@ -236,7 +241,26 @@ class RadialMenu(QWidget):
         for items in self.rings.values():
             self._render(len(items))
         self.spring = [0.0] * len(self.items)
+        self._shape()
         self.update()
+
+    def _shape(self):
+        """No compositor (XFCE etc.): cut the window to the menu's outline."""
+        if not glass.no_compositor():
+            return
+        c = QPointF(SIZE / 2, SIZE / 2)
+        path = QPainterPath()
+        path.addEllipse(c, R_HUB + 2, R_HUB + 2)
+        n = len(self.items) or 0
+        if n:
+            for i in range(n):
+                a0, a1 = angles(n, i)
+                path = path.united(sector_path(c, R_IN - 2, R_OUT + 14, a0 - 1, a1 + 1))
+        else:
+            outer = QPainterPath()
+            outer.addEllipse(c, R_OUT + 14, R_OUT + 14)
+            path = path.united(outer)       # united, not added: odd-even fill would punch a hole
+        glass.apply_shape(self, path)
 
     def next_ring(self):
         if len(self.ring_names) > 1:
@@ -245,6 +269,7 @@ class RadialMenu(QWidget):
             self.spring = [0.0] * len(self.items)
             self._swap = 0.0
             self.swap_anim.start()
+            self._shape()
             self.update()
 
     def _set_t(self, v):

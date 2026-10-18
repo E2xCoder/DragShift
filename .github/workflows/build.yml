@@ -177,8 +177,92 @@ jobs:
           name: mac-${{ matrix.arch }}
           path: dist/DragShift-mac-${{ matrix.arch }}.dmg
 
+  linux:
+    # Built on Debian 12 (glibc 2.36): the .deb runs on Debian 12/13, Ubuntu 23.04+, Mint 22, MX 23…
+    runs-on: ubuntu-latest
+    container: debian:12
+    steps:
+      - name: System packages
+        run: |
+          apt-get update -q
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+            git ca-certificates python3 python3-venv python3-dev binutils dpkg-dev file \
+            libx11-6 libxext6 libxrender1 libxkbcommon0 libxkbcommon-x11-0 libxcb1 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 libfontconfig1 libfreetype6 \
+            libdbus-1-3 libegl1 libgl1 libglib2.0-0 \
+            xvfb xfwm4 thunar xdotool dbus-x11 ffmpeg feh fonts-dejavu-core fonts-noto-core \
+            desktop-file-utils hicolor-icon-theme xdg-utils
+
+      - uses: actions/checkout@v4
+
+      - name: Python environment
+        run: |
+          python3 -m venv /opt/venv
+          /opt/venv/bin/pip install -q --upgrade pip
+          /opt/venv/bin/pip install -q -r requirements.txt pyinstaller pytest
+
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: /opt/venv/bin/python -m pytest -q
+
+      - name: Build the app folder
+        run: /opt/venv/bin/pyinstaller DragShift.spec --noconfirm
+
+      - name: Build the .deb
+        run: |
+          PATH=/opt/venv/bin:$PATH packaging/linux/build-deb.sh 1.2.0
+          dpkg-deb --info dist/DragShift-linux-amd64.deb
+          desktop-file-validate packaging/linux/dragshift.desktop
+
+      - name: Install the .deb and self-test it
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          apt-get install -y -q ./dist/DragShift-linux-amd64.deb
+          test -x /usr/bin/dragshift
+          dragshift --selftest
+
+      - name: End-to-end on XFCE (Xvfb + xfwm4 with compositor off + Thunar)
+        run: |
+          export DISPLAY=:99 LANG=C.UTF-8 LC_ALL=C.UTF-8
+          Xvfb :99 -screen 0 1280x800x24 >/tmp/xvfb.log 2>&1 &
+          sleep 2
+          eval $(dbus-launch --sh-syntax)
+          /opt/venv/bin/python -c "from dragshift.imaging import gradient; gradient((1280, 800), ['#ffb36b', '#ff5f6d', '#c2508f', '#7b8cff'], 160).save('/tmp/wall.png')"
+          feh --no-fehbg --bg-fill /tmp/wall.png
+          xfwm4 --compositor=off >/tmp/xfwm4.log 2>&1 &
+          sleep 2
+          /opt/venv/bin/python demo/e2e_linux.py
+
+      - name: Summary
+        if: always()
+        run: cat e2e_linux_out/results.md >> $GITHUB_STEP_SUMMARY || true
+
+      - name: Save results to the e2e-linux-output branch
+        if: always() && github.event_name == 'push'
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          mkdir -p /tmp/o && cp -r e2e_linux_out/* /tmp/o/ || true
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git checkout --orphan e2e-linux-output
+          git rm -rfq . || true
+          git clean -fdxq -e dist || true
+          cp -r /tmp/o/* . || true
+          git add -A -- . ':!dist'
+          git commit -qm "Debian/XFCE E2E results ${GITHUB_SHA}" || true
+          git push -f origin e2e-linux-output
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-deb
+          path: dist/DragShift-linux-amd64.deb
+
   publish:
-    needs: [windows, macos]
+    needs: [windows, macos, linux]
     if: always() && github.event_name == 'push' && needs.windows.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -210,6 +294,9 @@ jobs:
             Open the .dmg and drag DragShift to Applications.
             **First launch (until DragShift is notarized by Apple):** open DragShift once and click **Done** on the warning, then go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to "DragShift was blocked", and confirm. You only do this once.
             Or in Terminal: `xattr -dr com.apple.quarantine /Applications/DragShift.app`
+
+            **Linux** (Debian 12+, Ubuntu 23.04+, Mint, MX… on X11 desktops such as XFCE, MATE, Cinnamon):
+            - **DragShift-linux-amd64.deb** — install with `sudo apt install ./DragShift-linux-amd64.deb`, then open DragShift from the app menu. Works with or without a compositor.
 
             Enjoying DragShift? Tips are welcome: [Cash App $AtikaKadesha](https://cash.app/$AtikaKadesha) ♥
 
