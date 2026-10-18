@@ -201,7 +201,10 @@ jobs:
             - **DragShift-Setup.exe** — recommended. Per-user install (no admin), Start menu, start with Windows, right-click "DragShift…" and Send To.
             - **DragShift.exe** — portable.
 
-            **Mac** (macOS 11+)
+            **Mac** (macOS 11+). Easiest, with no security warning, is to paste into Terminal:
+            `curl -fsSL https://raw.githubusercontent.com/llamaboi55/DragShift/main/install-mac.sh | bash`
+
+            Or download:
             - **DragShift-mac-apple-silicon.dmg** — M1/M2/M3/M4 Macs.
             - **DragShift-mac-intel.dmg** — Intel Macs.
             Open the .dmg and drag DragShift to Applications.

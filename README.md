@@ -11,14 +11,23 @@ From the [latest release](../../releases/latest):
 - **DragShift-Setup.exe** (recommended): installs for your user only, so no admin rights are needed. It adds a Start menu entry, an option to start with Windows, a right-click **DragShift…** entry and a **Send to → DragShift** entry. It uninstalls cleanly from Settings → Apps.
 - **DragShift.exe**: a portable version you can run from anywhere.
 
+**Mac (easiest, no security warning):** paste this into Terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/llamaboi55/DragShift/main/install-mac.sh | bash
+```
+
+It picks the right build for your Mac, installs it to Applications and opens it ([see what it does](install-mac.sh)). Run the same line again to update.
+
+Or download the .dmg yourself:
 - **DragShift-mac-apple-silicon.dmg**: for Macs with M1, M2, M3 or M4 chips (macOS 11 or later).
 - **DragShift-mac-intel.dmg**: for Intel Macs.
 
-On Mac, open the .dmg and drag **DragShift** into Applications. DragShift lives in the menu bar and has no Dock icon. You can also right-click any file → **Open With → DragShift**.
+Open the .dmg and drag **DragShift** into Applications. DragShift lives in the menu bar and has no Dock icon. You can also right-click any file → **Open With → DragShift**.
 
 > **First launch on Windows:** SmartScreen may warn because the app isn't code-signed yet. Click **More info → Run anyway**.
 >
-> **First launch on Mac (until DragShift is notarized by Apple):** macOS says *"Apple could not verify 'DragShift' is free of malware."* This happens with any app that hasn't paid for Apple's notarization; DragShift's code is all public in this repo. To open it:
+> **First launch on Mac, if you used the .dmg instead of the Terminal line:** macOS says *"Apple could not verify 'DragShift' is free of malware."* This happens with any app that hasn't paid for Apple's notarization; DragShift's code is all public in this repo. To open it:
 > 1. Open DragShift once and click **Done** on the warning.
 > 2. Go to  → **System Settings → Privacy & Security**, scroll down to *"DragShift was blocked…"* and click **Open Anyway**. Enter your password and confirm.
 > 3. That's it. macOS remembers the choice.
@@ -69,6 +78,10 @@ Every push runs these jobs on GitHub's Windows and Mac machines:
 DragShift is free. If it saves you time, you can leave a tip on Cash App: [**$AtikaKadesha**](https://cash.app/$AtikaKadesha). Thank you!
 
 <img src="docs/tip-cashapp.png" alt="Cash App QR code for $AtikaKadesha" width="220">
+
+## License
+
+[MIT](LICENSE): free to use, modify and share.
 
 ## Run from source
 
