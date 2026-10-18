@@ -18,7 +18,7 @@ from .radial import Item, RadialMenu
 from .settings import Settings, SettingsWindow, WelcomeWindow, TRIGGERS
 from .toasts import ToastStack
 from .trigger import DragShiftWatcher
-from .util import UserError, category, file_size, human_size
+from .util import UserError, category, file_size, human_size, keep, release
 
 APP_NAME = "DragShift"
 VERSION = __version__
@@ -274,18 +274,20 @@ class DragShiftApp(QObject):
         job = Job(action, srcs, fn, extra)
 
         def done(r):
+            release(job)
             state["finished"] = True
             card = state["card"] or self.toasts.new()
             card.done(r)
 
         def failed(msg):
+            release(job)
             state["finished"] = True
             card = state["card"] or self.toasts.new()
             card.error("Couldn't finish", msg)
 
         job.sig.done.connect(done)
         job.sig.failed.connect(failed)
-        self.pool.start(job)
+        self.pool.start(keep(job))
 
     def notify(self, action: str, srcs: list, outs: list, extra: str = ""):
         """Called by tool windows after they save."""
@@ -332,8 +334,32 @@ def send_to_running(payload: dict) -> bool:
     return True
 
 
+def setup_logging():
+    """Errors go to %LOCALAPPDATA%\\DragShift\\log.txt (pythonw / the .exe have no console)."""
+    import faulthandler
+    base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share") / "DragShift"
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / "log.txt"
+    if path.exists() and path.stat().st_size > 1_000_000:
+        path.replace(base / "log.old.txt")
+    f = open(path, "a", encoding="utf-8", buffering=1)
+    f.write(f"\n==== DragShift {VERSION} started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+    if sys.stderr is None or getattr(sys, "frozen", False) or sys.executable.lower().endswith("pythonw.exe"):
+        sys.stdout = sys.stderr = f
+    faulthandler.enable(f)
+
+    def hook(t, v, tb):
+        f.write("Unhandled: " + "".join(traceback.format_exception(t, v, tb)))
+    sys.excepthook = hook
+    return path
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv if argv is None else argv
+    try:
+        setup_logging()
+    except Exception:
+        pass
     if IS_WIN:
         try:  # crisp taskbar/tray icon grouping
             import ctypes

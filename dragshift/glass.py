@@ -300,8 +300,9 @@ class LiquidBacking(QObject):
         qi = shot.toImage().scaled(rect.width(), rect.height(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
         self._serial += 1
         job = _LiquidJob(self._serial, pil_from_qimage(qi), rect.width(), rect.height(), self.radius, self.style)
-        job.sig.done.connect(self._done)
-        QThreadPool.globalInstance().start(job)
+        from .util import keep, release
+        job.sig.done.connect(lambda *a, j=job: (release(j), self._done(*a)))
+        QThreadPool.globalInstance().start(keep(job))
 
     def _done(self, serial, img, light):
         if serial == self._serial:

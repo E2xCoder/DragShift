@@ -184,8 +184,9 @@ class RadialMenu(QWidget):
             return
         self.liquid[n] = QImage()  # placeholder: in flight
         job = _RenderJob(self._serial, n, self._raw_backdrop)
-        job.sig.done.connect(self._rendered)
-        QThreadPool.globalInstance().start(job)
+        from .util import keep, release
+        job.sig.done.connect(lambda *a, j=job: (release(j), self._rendered(*a)))
+        QThreadPool.globalInstance().start(keep(job))
 
     def _rendered(self, serial: int, n: int, img: QImage, light: bool):
         if serial == self._serial:

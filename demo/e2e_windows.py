@@ -562,6 +562,7 @@ def main():
         time.sleep(1)
         wk.stop_recording(rec)
         app.kill()
+        wk.copy_app_log(OUT / "app_log.txt")
         passed = sum(r["status"] == "PASS" for r in RESULTS)
         (OUT / "results.json").write_text(json.dumps(RESULTS, indent=1))
         lines = [f"# DragShift end-to-end test — {passed}/{len(RESULTS)} passed", "",

@@ -93,8 +93,36 @@ def prepare_desktop(wallpaper_colors=("#ffb36b", "#ff5f6d", "#c2508f", "#7b8cff"
     subprocess.run(["reg", "add", r"HKCU\Software\DragShift\DragShift", "/v", "welcomed", "/t", "REG_SZ",
                     "/d", "true", "/f"], capture_output=True)
     user32.SendMessageTimeoutW(0xFFFF, 0x1A, 0, "Environment", 2, 1000, None)
+    dismiss_system_dialogs()
     pyautogui.hotkey("win", "d")
     time.sleep(1.2)
+
+
+def dismiss_system_dialogs():
+    """GitHub's Windows image sometimes shows a 'paging file' warning; close small OK dialogs."""
+    try:
+        for w in uia().windows():
+            try:
+                r = w.rectangle()
+                if r.width() > 800 or "DragShift" in w.window_text():
+                    continue
+                ok = w.child_window(title="OK", control_type="Button")
+                if ok.exists(timeout=0.2):
+                    log("closing dialog:", w.window_text())
+                    ok.invoke()
+            except Exception:
+                pass
+    except Exception as e:
+        log("dialog sweep failed", e)
+
+
+def copy_app_log(dest: Path):
+    src = Path(os.environ.get("LOCALAPPDATA", "")) / "DragShift" / "log.txt"
+    try:
+        if src.exists():
+            dest.write_bytes(src.read_bytes())
+    except Exception:
+        pass
 
 
 def desktop_dir() -> Path:

@@ -80,3 +80,20 @@ def file_size(path: str | Path) -> int:
         return os.path.getsize(path)
     except OSError:
         return 0
+
+
+# ---------------------------------------------------------------- background job lifetime
+# QThreadPool runs a QRunnable in C++, but the Python object (and the QObject carrying its
+# signals) can be garbage-collected while it's still running: results then never arrive,
+# or the app crashes. Keep every job alive until its result has been handled.
+ALIVE: set = set()
+
+
+def keep(job):
+    job.setAutoDelete(False)
+    ALIVE.add(job)
+    return job
+
+
+def release(job):
+    ALIVE.discard(job)

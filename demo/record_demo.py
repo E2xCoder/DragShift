@@ -198,6 +198,7 @@ def main():
         time.sleep(0.5)
         wk.stop_recording(rec)
         app.kill()
+        wk.copy_app_log(OUT / "app_log.txt")
         (OUT / "steps.json").write_text(json.dumps(STEPS, indent=1))
         res = OUT / "results"
         res.mkdir(exist_ok=True)
