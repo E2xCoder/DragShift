@@ -17,6 +17,11 @@ from PIL import ImageGrab
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 user32 = ctypes.windll.user32
+try:  # the Windows console is cp1252; never let a "→" crash a run
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.03
 
@@ -32,7 +37,10 @@ def set_log(path: Path):
 
 def log(*a):
     msg = " ".join(str(x) for x in a)
-    print(msg, flush=True)
+    try:
+        print(msg, flush=True)
+    except Exception:
+        pass
     if LOG:
         LOG.write(f"[{time.time() - T0 if T0 else 0:7.2f}] {msg}\n")
         LOG.flush()

@@ -554,6 +554,8 @@ def main():
             drive_addbg)
         run("Desktop: 2 PDFs merge", "desktop", ["D-Appendix.pdf", "D-Report.pdf"], "Tools", "Merge", v_merged,
             select_extra=True)
+    except Exception:
+        wk.log("E2E ABORTED\n" + traceback.format_exc())
     finally:
         pyautogui.mouseUp()
         pyautogui.keyUp("shift")
