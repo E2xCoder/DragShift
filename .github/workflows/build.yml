@@ -229,6 +229,12 @@ jobs:
           dragshift --selftest > e2e_linux_out/selftest.txt 2>&1
           rc=$?
           set -e
+          echo "exit code $rc" >> e2e_linux_out/selftest.txt
+          cat ~/.local/share/DragShift/log.txt >> e2e_linux_out/selftest.txt 2>/dev/null || true
+          if [ $rc -ne 0 ]; then
+            /opt/venv/bin/python -X faulthandler -m dragshift --selftest >> e2e_linux_out/selftest.txt 2>&1 || true
+            cat ~/.local/share/DragShift/log.txt >> e2e_linux_out/selftest.txt 2>/dev/null || true
+          fi
           cat e2e_linux_out/selftest.txt
           if [ $rc -ne 0 ]; then
             tail -25 e2e_linux_out/selftest.txt | sed 's/%/%25/g' | while IFS= read -r l; do echo "::error title=selftest::$l"; done
