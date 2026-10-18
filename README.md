@@ -1,6 +1,6 @@
 # DragShift
 
-Convert and edit files on Windows with a liquid-glass radial menu. Start dragging any file, press **Shift**, and drop it on a slice.
+Convert and edit files on **Windows and Mac** with a liquid-glass radial menu. Start dragging any file, press **Shift**, and drop it on a slice.
 
 ![DragShift radial menu and Add BG editor](docs/preview.png)
 
@@ -11,7 +11,14 @@ From the [latest release](../../releases/latest):
 - **DragShift-Setup.exe** (recommended): installs for your user only, so no admin rights are needed. It adds a Start menu entry, an option to start with Windows, a right-click **DragShift…** entry and a **Send to → DragShift** entry. It uninstalls cleanly from Settings → Apps.
 - **DragShift.exe**: a portable version you can run from anywhere.
 
-> Windows SmartScreen may warn because the app isn't code-signed. Click **More info → Run anyway**.
+- **DragShift-mac-apple-silicon.dmg**: for Macs with M1, M2, M3 or M4 chips (macOS 11 or later).
+- **DragShift-mac-intel.dmg**: for Intel Macs.
+
+On Mac, open the .dmg and drag **DragShift** into Applications. DragShift lives in the menu bar and has no Dock icon. You can also right-click any file → **Open With → DragShift**.
+
+> **First launch.** Windows SmartScreen may warn because the app isn't code-signed: click **More info → Run anyway**. On Mac, right-click the app → **Open** → **Open** (or go to System Settings → Privacy & Security → **Open Anyway**), because it isn't notarized by Apple yet.
+>
+> **Mac, optional:** allow **Screen Recording** when DragShift asks, so the glass can refract the windows behind it. Without it, the glass shows your wallpaper. Nothing is ever saved or sent.
 
 ## How to use
 
@@ -41,10 +48,12 @@ The menu, notifications and windows use real **liquid-glass** rendering. DragShi
 
 ## Tested on real Windows
 
-Every push runs three jobs on GitHub's Windows machines:
+Every push runs these jobs on GitHub's Windows and Mac machines:
 
 - **Build:** unit tests, the portable exe and installer builds, a self-test of each build, and a silent install → run → uninstall check.
 - **End-to-end:** a script moves the real mouse to drag files from File Explorer *and* the Desktop, presses Shift, drops on every conversion and tool, drives each tool window, and checks every output file (format, dimensions, page counts, encryption, metadata removed). The results table and a screen recording are saved to the `e2e-output` branch.
+- **Mac end-to-end:** real Finder drags with Shift (Quartz mouse and keyboard events) through conversions, PDF tools, merging and the tool windows. Every output is checked, and the run is recorded to the `e2e-mac-output` branch.
+- **Mac builds:** `DragShift.app` and the .dmg for Apple Silicon and Intel, each self-tested inside the app bundle.
 - **Demo video:** pushing to the `demo` branch records a showcase video.
 
 ## Run from source
@@ -54,4 +63,4 @@ pip install -r requirements.txt
 python -m dragshift
 ```
 
-Tests: `python -m pytest -q`. Logs are written to `%LOCALAPPDATA%\DragShift\log.txt`.
+Tests: `python -m pytest -q`. Logs are written to `%LOCALAPPDATA%\DragShift\log.txt` on Windows and `~/Library/Logs/DragShift/log.txt` on Mac.
