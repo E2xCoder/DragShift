@@ -26,6 +26,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt imageio-ffmpeg pyautogui
 
+      - name: Test the one-line installer (as a user would run it)
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/install-mac.sh" | bash
+          sleep 6
+          pgrep -x DragShift && echo "DragShift is running"
+          if xattr -p com.apple.quarantine /Applications/DragShift.app 2>/dev/null; then
+            echo "::error::app is quarantined"; exit 1
+          fi
+          spctl --assess --type execute /Applications/DragShift.app 2>&1 || true   # informational
+          pkill -x DragShift || true
+          echo "installer OK"
+
       - name: Run end-to-end scenarios on the Finder desktop
         run: python demo/e2e_mac.py
 
