@@ -27,7 +27,10 @@ class GlassWindow(QWidget):
         self.resize(*size)
         self._drag: QPoint | None = None
         self._acrylic = False
-        self.radius = 9 if IS_WIN else 16
+        self.radius = 18
+        self.liquid = glass.LiquidBacking(self, self.radius)
+        self.liquid.changed.connect(self.update)
+        self._fade = 0.0
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(14, 8, 14, 12)
@@ -58,14 +61,46 @@ class GlassWindow(QWidget):
         outer.addLayout(grip_row)
 
     # ---- window behaviour
+    def present(self):
+        """Centre on the cursor's screen, capture what's behind, then show."""
+        from PySide6.QtGui import QCursor, QGuiApplication
+        scr = (QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()).availableGeometry()
+        self.resize(min(self.width(), scr.width() - 40), min(self.height(), scr.height() - 40))
+        self.move(scr.center() - self.rect().center())
+        self._placed = True
+        self.liquid.capture_at(self.frameGeometry())
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
     def showEvent(self, e):
         super().showEvent(e)
-        if not self._acrylic:
-            self._acrylic = glass.enable_acrylic(int(self.winId()))
-        scr = self.screen().availableGeometry()
         if not getattr(self, "_placed", False):
+            scr = self.screen().availableGeometry()
             self.move(scr.center() - self.rect().center())
             self._placed = True
+            self.liquid.capture_at(self.frameGeometry())
+        self.liquid.excluded = glass.exclude_from_capture(int(self.winId()))
+
+    def moveEvent(self, e):
+        super().moveEvent(e)
+        self._stale()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._stale()
+
+    def _stale(self):
+        if not self.isVisible():
+            return
+        if self.liquid.excluded:
+            self.liquid.moved()
+        elif self.liquid.image is not None:
+            # can't re-capture behind ourselves: switch to the system blur instead
+            self.liquid.image = None
+            if IS_WIN and not self._acrylic:
+                self._acrylic = glass.enable_acrylic(int(self.winId()))
+            self.update()
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key_Escape:
@@ -89,11 +124,17 @@ class GlassWindow(QWidget):
 
     def paintEvent(self, e):
         p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
         r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         path = glass.rounded_rect_path(r, self.radius)
-        # With real acrylic behind us a light tint is enough; otherwise fake the frost.
-        tint = QColor(30, 24, 44, 120) if self._acrylic else QColor(38, 30, 56, 225)
-        glass.paint_glass(p, path, tint=tint, rainbow_alpha=150)
+        img = self.liquid.image
+        if img is not None and not img.isNull() and img.size() == self.size():
+            p.drawImage(0, 0, img)
+            # large surfaces need more opacity than a menu so content stays readable
+            glass.paint_glass(p, path, tint=QColor(22, 17, 34, 150), rainbow_alpha=150)
+        else:
+            tint = QColor(30, 24, 44, 125) if self._acrylic else QColor(38, 30, 56, 228)
+            glass.paint_glass(p, path, tint=tint, rainbow_alpha=150)
 
 
 class ImageView(QWidget):

@@ -93,12 +93,23 @@ def paint_glass(p: QPainter, path: QPainterPath, backdrop: QPixmap | None = None
     if rim:
         p.save()
         p.setRenderHint(QPainter.Antialiasing)
-        # inner bright edge
-        p.setPen(QPen(QColor(255, 255, 255, 90), 1.0))
+        # inner bezel glow: a wide, soft white stroke clipped to the inside of the shape
+        p.setClipPath(path)
+        for w, a in ((14, 10), (7, 16), (3, 26)):
+            p.setPen(QPen(QColor(255, 255, 255, int(a * highlight)), w))
+            p.drawPath(path)
+        p.setClipping(False)
+        # specular rim: bright on the edge facing the light (top-left), softer opposite
+        spec = QLinearGradient(rect.topLeft(), rect.bottomRight())
+        spec.setColorAt(0.0, QColor(255, 255, 255, int(235 * min(1.0, highlight))))
+        spec.setColorAt(0.35, QColor(255, 255, 255, 60))
+        spec.setColorAt(0.65, QColor(255, 255, 255, 35))
+        spec.setColorAt(1.0, QColor(255, 255, 255, 150))
+        p.setPen(QPen(QBrush(spec), 1.3))
         p.drawPath(path)
-        # iridescent rim
-        p.setPen(iridescent_pen(rect.center(), 1.6, rainbow_alpha))
-        p.drawPath(path)
+        # iridescent dispersion just outside the rim
+        p.setPen(iridescent_pen(rect.center(), 1.4, rainbow_alpha))
+        p.drawPath(path.translated(0.0, 0.0))
         p.restore()
 
 
@@ -110,8 +121,9 @@ QLabel#title {{ font-size: 11pt; font-weight: 600; }}
 QLabel#dim, QLabel.dim {{ color: {TEXT_DIM}; font-size: 9pt; }}
 QLabel#section {{ color: {TEXT_DIM}; font-size: 8.5pt; font-weight: 600; letter-spacing: 1px; }}
 QPushButton {{
-  background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.28);
-  border-radius: 9px; padding: 6px 14px;
+  background: rgba(255,255,255,0.13); border: 1px solid rgba(255,255,255,0.30);
+  border-top-color: rgba(255,255,255,0.55); border-bottom-color: rgba(255,255,255,0.16);
+  border-radius: 15px; padding: 6px 15px; min-height: 18px;
 }}
 QPushButton:hover {{ background: rgba(255,255,255,0.22); }}
 QPushButton:pressed {{ background: rgba(255,255,255,0.08); }}
@@ -121,7 +133,8 @@ QPushButton:checked {{
 }}
 QPushButton#primary {{
   background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 {ACCENT_A}, stop:0.55 {ACCENT_B}, stop:1 {ACCENT_C});
-  border: 1px solid rgba(255,255,255,0.6); font-weight: 600; padding: 7px 18px;
+  border: 1px solid rgba(255,255,255,0.55); border-top-color: rgba(255,255,255,0.9);
+  font-weight: 600; padding: 7px 20px; border-radius: 16px;
 }}
 QPushButton#primary:hover {{ border: 1px solid #ffffff; }}
 QPushButton#chrome {{ background: transparent; border: none; padding: 2px 8px; font-size: 11pt; border-radius: 6px; }}
@@ -137,9 +150,15 @@ QSlider::handle:horizontal {{
   border: 1px solid rgba(0,0,0,0.15);
 }}
 QSpinBox, QLineEdit, QComboBox {{
-  background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.25);
-  border-radius: 7px; padding: 3px 6px; selection-background-color: {ACCENT_B};
+  background: rgba(0,0,0,0.16); border: 1px solid rgba(255,255,255,0.22);
+  border-bottom-color: rgba(255,255,255,0.40);
+  border-radius: 10px; padding: 4px 8px; selection-background-color: {ACCENT_B};
 }}
+QLineEdit:focus, QSpinBox:focus {{ border: 1px solid rgba(255,255,255,0.7); }}
+QFrame#card {{ background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.14); border-radius: 14px; }}
+QLabel#big {{ font-size: 17pt; font-weight: 700; }}
+QLabel#good {{ color: #8dffb8; font-weight: 600; }}
+QLabel#warn {{ color: #ffd36b; font-weight: 600; }}
 QComboBox QAbstractItemView {{ background: #2a2438; border: 1px solid rgba(255,255,255,0.25); }}
 QCheckBox::indicator {{ width: 16px; height: 16px; border-radius: 5px; border: 1px solid rgba(255,255,255,0.5); background: rgba(255,255,255,0.1); }}
 QCheckBox::indicator:checked {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 {ACCENT_A}, stop:1 {ACCENT_B}); }}
@@ -207,3 +226,94 @@ def rounded_rect_path(r: QRectF, radius: float) -> QPainterPath:
     path = QPainterPath()
     path.addRoundedRect(r, radius, radius)
     return path
+
+
+# ---------------------------------------------------------------- live liquid backing
+def exclude_from_capture(hwnd: int) -> bool:
+    """Hide a window from screen capture (Windows 10 2004+), so we can re-capture what's
+    behind it while it's visible. Skipped while recording demos (it would hide us)."""
+    import os
+    if sys.platform != "win32" or os.environ.get("DRAGSHIFT_RECORDING"):
+        return False
+    try:
+        return bool(ctypes.windll.user32.SetWindowDisplayAffinity(ctypes.c_void_p(hwnd), 0x11))
+    except Exception:
+        return False
+
+
+from PySide6.QtCore import QObject, QRect, QRunnable, QThreadPool, QTimer, Signal  # noqa: E402
+
+
+class _LiquidSig(QObject):
+    done = Signal(int, QImage, bool)
+
+
+class _LiquidJob(QRunnable):
+    def __init__(self, serial, backdrop, w, h, radius, style):
+        super().__init__()
+        self.args = (serial, backdrop, w, h, radius, style)
+        self.sig = _LiquidSig()
+
+    def run(self):
+        serial, backdrop, w, h, radius, style = self.args
+        try:
+            from . import liquid
+            sdf = liquid.sdf_rounded_rect(w, h, 0.5, 0.5, w - 0.5, h - 0.5, radius)
+            img, light = liquid.render(backdrop, sdf, style)
+            try:
+                self.sig.done.emit(serial, qimage_from_pil(img), light)
+            except RuntimeError:
+                pass  # window closed before the render finished
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
+
+class LiquidBacking(QObject):
+    """Keeps a refracted snapshot of whatever is behind a rounded-rect window."""
+    changed = Signal()
+
+    def __init__(self, widget, radius: float, style=None):
+        super().__init__(widget)
+        from .liquid import GlassStyle
+        self.w = widget
+        self.radius = radius
+        self.style = style or GlassStyle(blur=16, strength=14, bezel=20)
+        self.image: QImage | None = None
+        self.is_light = False
+        self.excluded = False
+        self._serial = 0
+        self._debounce = QTimer(self, singleShot=True, interval=140, timeout=self.refresh)
+
+    def capture_at(self, rect: QRect):
+        """Grab the screen under `rect` (call before the window is shown, or when excluded)."""
+        from PySide6.QtGui import QGuiApplication
+        scr = QGuiApplication.screenAt(rect.center()) or QGuiApplication.primaryScreen()
+        g = scr.geometry()
+        dpr = scr.devicePixelRatio()
+        try:
+            shot = scr.grabWindow(0, rect.x() - g.x(), rect.y() - g.y(), rect.width(), rect.height())
+        except Exception:
+            return
+        if shot.isNull():
+            return
+        qi = shot.toImage().scaled(rect.width(), rect.height(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        self._serial += 1
+        job = _LiquidJob(self._serial, pil_from_qimage(qi), rect.width(), rect.height(), self.radius, self.style)
+        job.sig.done.connect(self._done)
+        QThreadPool.globalInstance().start(job)
+
+    def _done(self, serial, img, light):
+        if serial == self._serial:
+            self.image, self.is_light = img, light
+            self.changed.emit()
+
+    def moved(self):
+        """Window moved/resized: refresh once it settles (only possible when excluded)."""
+        if self.excluded:
+            self.image = None if self.image is not None and self.image.size() != self.w.size() else self.image
+            self._debounce.start()
+
+    def refresh(self):
+        if self.excluded and self.w.isVisible():
+            self.capture_at(self.w.frameGeometry())

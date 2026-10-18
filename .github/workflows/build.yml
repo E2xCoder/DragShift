@@ -31,32 +31,61 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
 
-      - name: Build DragShift.exe
-        run: >
-          pyinstaller run.py --noconfirm --onefile --windowed --name DragShift
-          --icon dragshift/assets/dragshift.ico
-          --add-data "dragshift/assets;dragshift/assets"
-          --collect-all pillow_heif
-          --hidden-import win32com.client
-          --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtWebEngineWidgets
-          --exclude-module PySide6.QtQml --exclude-module PySide6.QtQuick
-          --exclude-module PySide6.Qt3DCore --exclude-module PySide6.QtMultimedia
-          --exclude-module PySide6.QtCharts --exclude-module PySide6.QtDataVisualization
-          --exclude-module tkinter
+      - name: Build app folder (for the installer)
+        run: pyinstaller DragShift.spec --noconfirm
 
-      - name: Smoke-test the built .exe
+      - name: Build portable DragShift.exe
+        run: pyinstaller DragShift.spec --noconfirm
+        env:
+          ONEFILE: "1"
+
+      - name: Smoke-test both builds
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          $p = Start-Process -FilePath dist\DragShift.exe -ArgumentList "--selftest" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Self-test failed with exit code $($p.ExitCode)" }
-          "Self-test passed"
+          foreach ($exe in @("dist\DragShift\DragShift.exe", "dist\DragShift.exe")) {
+            $p = Start-Process -FilePath $exe -ArgumentList "--selftest" -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "Self-test failed for $exe ($($p.ExitCode))" }
+            "Self-test passed: $exe"
+          }
+          "{0:N1} MB portable" -f ((Get-Item dist\DragShift.exe).Length / 1MB)
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress | Out-Null
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          }
+          & $iscc installer\DragShift.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+          "{0:N1} MB installer" -f ((Get-Item dist\DragShift-Setup.exe).Length / 1MB)
+
+      - name: Test the installer (silent install, run, uninstall)
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\DragShift-Setup.exe -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=contextmenu" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Install failed ($($p.ExitCode))" }
+          $app = "$env:LOCALAPPDATA\Programs\DragShift\DragShift.exe"
+          if (-not (Test-Path $app)) { throw "App not installed" }
+          if (-not (Test-Path "HKCU:\Software\Classes\*\shell\DragShift\command")) { throw "Context menu not registered" }
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $t = Start-Process $app -ArgumentList "--selftest" -Wait -PassThru
+          if ($t.ExitCode -ne 0) { throw "Installed app self-test failed" }
+          Remove-Item Env:QT_QPA_PLATFORM
+          $u = Start-Process "$env:LOCALAPPDATA\Programs\DragShift\unins000.exe" -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES" -Wait -PassThru
+          Start-Sleep 3
+          if (Test-Path "HKCU:\Software\Classes\*\shell\DragShift") { throw "Uninstall left the context menu behind" }
+          "Installer OK"
 
       - uses: actions/upload-artifact@v4
         with:
           name: DragShift-windows
-          path: dist/DragShift.exe
+          path: |
+            dist/DragShift.exe
+            dist/DragShift-Setup.exe
 
       - name: Publish download (latest)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -66,12 +95,18 @@ jobs:
           name: DragShift (latest build)
           make_latest: true
           body: |
-            Download **DragShift.exe** below, double-click it, and look for the rainbow ring in your system tray.
+            **DragShift-Setup.exe** — recommended. Installs per-user (no admin), adds Start menu, start-with-Windows, right-click "DragShift…" and Send To.
+            **DragShift.exe** — portable, run from anywhere.
+
             Built automatically from commit ${{ github.sha }}.
-          files: dist/DragShift.exe
+          files: |
+            dist/DragShift.exe
+            dist/DragShift-Setup.exe
 
       - name: Publish tagged release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/DragShift.exe
+          files: |
+            dist/DragShift.exe
+            dist/DragShift-Setup.exe

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from .util import sibling
+from .util import UserError, sibling
 
 try:  # HEIC / HEIF support
     import pillow_heif
@@ -45,6 +45,30 @@ def open_image(path: str | Path) -> Image.Image:
     return im
 
 
+def open_preview(path: str | Path, max_side: int = 1400) -> Image.Image:
+    """Fast, reduced-size decode for on-screen previews (JPEG decodes at 1/2, 1/4, 1/8 scale)."""
+    im = Image.open(path)
+    im.seek(0)
+    if im.format == "JPEG":
+        im.draft("RGB", (max_side, max_side))
+    im = ImageOps.exif_transpose(im)
+    if im.mode in ("P", "LA", "PA"):
+        im = im.convert("RGBA")
+    elif im.mode not in ("RGB", "RGBA", "L"):
+        im = im.convert("RGB")
+    if max(im.size) > max_side:
+        im.thumbnail((max_side, max_side), Image.LANCZOS)
+    return im
+
+
+def open_pdf(path: str | Path):
+    doc = fitz.open(path)
+    if doc.needs_pass:
+        doc.close()
+        raise UserError("This PDF is password-protected. Remove the password first.")
+    return doc
+
+
 def flatten(im: Image.Image, bg=(255, 255, 255)) -> Image.Image:
     if im.mode == "RGBA":
         base = Image.new("RGB", im.size, bg)
@@ -53,7 +77,9 @@ def flatten(im: Image.Image, bg=(255, 255, 255)) -> Image.Image:
     return im.convert("RGB") if im.mode != "RGB" else im
 
 
-def save_image(im: Image.Image, out: Path, target: str, quality: int = 92, exif=None) -> None:
+def save_image(im: Image.Image, out: Path, target: str, quality: int | None = None, exif=None) -> None:
+    from .util import CONFIG
+    quality = quality or int(CONFIG.get("jpg_quality", 90))
     target = target.upper()
     fmt = PIL_FORMAT[target]
     if target in NO_ALPHA:
@@ -92,10 +118,12 @@ def images_to_single_pdf(srcs: list[str | Path]) -> list[Path]:
 
 
 # ---------------------------------------------------------------- PDF
-def pdf_to_images(src: str | Path, target: str, dpi: int = 200) -> list[Path]:
+def pdf_to_images(src: str | Path, target: str, dpi: int | None = None) -> list[Path]:
+    from .util import CONFIG
+    dpi = dpi or int(CONFIG.get("pdf_dpi", 200))
     target = target.upper()
     outs = []
-    with fitz.open(src) as doc:
+    with open_pdf(src) as doc:
         n = doc.page_count
         for i, page in enumerate(doc):
             pix = page.get_pixmap(dpi=dpi, alpha=False)
@@ -108,7 +136,7 @@ def pdf_to_images(src: str | Path, target: str, dpi: int = 200) -> list[Path]:
 
 
 def pdf_to_txt(src: str | Path) -> list[Path]:
-    with fitz.open(src) as doc:
+    with open_pdf(src) as doc:
         text = "\n\f\n".join(page.get_text("text") for page in doc)
     out = sibling(src, ext=".txt")
     out.write_text(text, encoding="utf-8")
@@ -122,7 +150,7 @@ def pdf_to_docx(src: str | Path) -> list[Path]:
     from docx.shared import Inches
 
     d = Document()
-    with fitz.open(src) as doc:
+    with open_pdf(src) as doc:
         for pno, page in enumerate(doc):
             if pno:
                 d.add_paragraph().add_run().add_break(WD_BREAK.PAGE)

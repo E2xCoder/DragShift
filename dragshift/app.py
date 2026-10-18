@@ -1,142 +1,83 @@
-"""DragShift: Shift+drag any file to convert or edit it from a radial glass menu."""
+"""DragShift: Shift+drag any file to convert or edit it from a radial liquid-glass menu."""
 from __future__ import annotations
 
+import json
 import os
-import subprocess
 import sys
+import time
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import (QLockFile, QObject, QPoint, QPointF, QRectF, QRunnable, QSize, Qt,
-                            QThreadPool, QTimer, Signal, QDir)
+from PySide6.QtCore import QDir, QObject, QPointF, QRunnable, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QCursor, QGuiApplication, QIcon, QPainter, QPixmap
-from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, QMenu,
-                               QSystemTrayIcon, QVBoxLayout, QWidget)
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
+from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QSystemTrayIcon, QWidget
 
-from . import convert, glass, imaging, tools
+from . import __version__, convert, glass, imaging, report, tools
 from .radial import Item, RadialMenu
+from .settings import Settings, SettingsWindow, WelcomeWindow, TRIGGERS
+from .toasts import ToastStack
 from .trigger import DragShiftWatcher
-from .util import category, file_size, human_size
+from .util import UserError, category, file_size, human_size
 
 APP_NAME = "DragShift"
-VERSION = "1.0.0"
+VERSION = __version__
 IS_WIN = sys.platform == "win32"
+IPC_NAME = "DragShift-" + (os.environ.get("USERNAME") or os.environ.get("USER") or "user")
 
 GLYPHS = {"Compress": "⇲", "Metadata": "ⓘ", "Redact": "▮", "Crop": "⌗", "Edit": "☼",
-          "Annotate": "✎", "Add BG": "▣", "Split": "✂", "Rotate": "⟳", "Merge": "⧉"}
+          "Annotate": "✎", "Add BG": "▣", "Resize": "⤢", "Split": "✂", "Rotate": "⟳",
+          "Merge": "⧉", "Protect": "⚿", "Extract": "⧈"}
+
+HINTS = {
+    "Compress": "Shrink file size", "Metadata": "View · remove GPS", "Redact": "Hide private info",
+    "Crop": "Trim to a ratio", "Edit": "Light · colour · rotate", "Annotate": "Arrows · text · steps",
+    "Add BG": "Gradient backdrop", "Resize": "Change dimensions", "Split": "One PDF per page",
+    "Rotate": "Turn pages 90°", "Merge": "Join into one PDF", "Protect": "Add a password",
+    "Extract": "Save embedded images",
+}
+FORMAT_HINTS = {"JPG": "Small, universal", "PNG": "Lossless · transparency", "WEBP": "Smallest for web",
+                "HEIC": "iPhone format", "TIFF": "Print · archival", "AVIF": "Next-gen, tiny",
+                "BMP": "Uncompressed", "PDF": "Document", "ICO": "Windows icon", "GIF": "Legacy web",
+                "DOCX": "Editable Word", "TXT": "Plain text"}
+
+IMAGE_TOOLS = ["Compress", "Resize", "Crop", "Edit", "Annotate", "Redact", "Add BG", "Metadata"]
+PDF_TOOLS = ["Compress", "Split", "Rotate", "Protect", "Extract", "Metadata"]
 
 
 # ---------------------------------------------------------------- background jobs
 class _Sig(QObject):
-    done = Signal(str, list)
-    failed = Signal(str, str)
+    done = Signal(object)
+    failed = Signal(str)
 
 
 class Job(QRunnable):
-    def __init__(self, title: str, fn):
+    def __init__(self, action: str, srcs: list, fn, extra: str = ""):
         super().__init__()
-        self.title, self.fn, self.sig = title, fn, _Sig()
+        self.action, self.srcs, self.fn, self.extra = action, srcs, fn, extra
+        self.sig = _Sig()
 
     def run(self):
         try:
             outs = self.fn() or []
-            self.sig.done.emit(self.title, [str(o) for o in outs])
+            self.sig.done.emit(report.summarize(self.action, self.srcs, outs, self.extra))
+        except UserError as e:
+            self.sig.failed.emit(str(e))
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
-            self.sig.failed.emit(self.title, str(e) or e.__class__.__name__)
+            self.sig.failed.emit(friendly_error(e))
 
 
-# ---------------------------------------------------------------- toast
-class Toast(QWidget):
-    """Small glass notification bottom-right. Click to show the result in Explorer."""
-
-    def __init__(self):
-        super().__init__(None)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint |
-                            Qt.WindowDoesNotAcceptFocus)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.setStyleSheet(glass.QSS)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(16, 12, 16, 12)
-        lay.setSpacing(2)
-        self.title = QLabel()
-        self.title.setObjectName("title")
-        self.sub = QLabel()
-        self.sub.setObjectName("dim")
-        lay.addWidget(self.title)
-        lay.addWidget(self.sub)
-        self.setFixedWidth(340)
-        self.hide_timer = QTimer(self, singleShot=True, timeout=self.hide)
-        self.target: str | None = None
-        self.error = False
-
-    def show_msg(self, title: str, sub: str, target: str | None = None, error=False):
-        self.title.setText(("⚠  " if error else "✓  ") + title)
-        self.sub.setText(sub)
-        self.target, self.error = target, error
-        self.adjustSize()
-        g = (QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()).availableGeometry()
-        self.move(g.right() - self.width() - 18, g.bottom() - self.height() - 18)
-        self.show()
-        self.raise_()
-        self.hide_timer.start(6000 if error else 3500)
-
-    def mouseReleaseEvent(self, e):
-        if self.target:
-            reveal(self.target)
-        self.hide()
-
-    def paintEvent(self, e):
-        p = QPainter(self)
-        path = glass.rounded_rect_path(QRectF(self.rect()).adjusted(1, 1, -1, -1), 14)
-        tint = QColor(120, 30, 40, 225) if self.error else QColor(38, 30, 56, 230)
-        glass.paint_glass(p, path, tint=tint, rainbow_alpha=190)
-
-
-def reveal(path: str):
-    if IS_WIN:
-        subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", "-R", path])
-    else:
-        subprocess.Popen(["xdg-open", str(Path(path).parent)])
-
-
-# ---------------------------------------------------------------- autostart
-RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-
-
-def launch_command() -> str:
-    if getattr(sys, "frozen", False):
-        return f'"{sys.executable}"'
-    return f'"{sys.executable}" -m dragshift'
-
-
-def autostart_enabled() -> bool:
-    if not IS_WIN:
-        return False
-    import winreg
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
-            winreg.QueryValueEx(k, APP_NAME)
-            return True
-    except OSError:
-        return False
-
-
-def set_autostart(on: bool):
-    if not IS_WIN:
-        return
-    import winreg
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
-        if on:
-            winreg.SetValueEx(k, APP_NAME, 0, winreg.REG_SZ, launch_command())
-        else:
-            try:
-                winreg.DeleteValue(k, APP_NAME)
-            except OSError:
-                pass
+def friendly_error(e: Exception) -> str:
+    msg = str(e) or e.__class__.__name__
+    low = msg.lower()
+    if isinstance(e, PermissionError) or "permission denied" in low:
+        return "Windows blocked writing next to the file. Try a folder you own, or set Settings → Save results → subfolder."
+    if "cannot identify image" in low:
+        return "This file doesn't look like an image DragShift can read."
+    if isinstance(e, FileNotFoundError):
+        return "The file was moved or deleted."
+    return msg
 
 
 # ---------------------------------------------------------------- icon
@@ -150,37 +91,40 @@ def make_icon() -> QIcon:
     p.setRenderHint(QPainter.Antialiasing)
     p.setPen(glass.iridescent_pen(QPointF(32, 32), 7, 255))
     p.drawEllipse(QPointF(32, 32), 24, 24)
-    p.setPen(Qt.NoPen)
-    p.setBrush(QColor(255, 255, 255))
-    p.drawEllipse(QPointF(32, 32), 9, 9)
     p.end()
     return QIcon(pm)
 
 
 # ---------------------------------------------------------------- the app
 class DragShiftApp(QObject):
-    def __init__(self, qapp: QApplication, transient: bool = False):
+    def __init__(self, qapp: QApplication):
         super().__init__()
         self.qapp = qapp
-        self.transient = transient  # launched with files while another copy owns the tray
+        self.settings = Settings()
+        self.settings.apply()
         self.pool = QThreadPool.globalInstance()
         self.windows: list[QWidget] = []
-        self.toast = Toast()
+        self.toasts = ToastStack()
         self.menu = RadialMenu(self.build_rings, self.describe)
         self.menu.activated.connect(self.run_item)
 
         self.watcher = DragShiftWatcher(self.menu.isVisible, lambda: self.menu.got_drag, self)
+        self.watcher.set_key(self.settings.get("trigger"))
         self.watcher.show_menu.connect(lambda pos: self.menu.popup(pos))
         self.watcher.toggle_ring.connect(self.menu.next_ring)
         self.watcher.hide_menu.connect(self.menu.close_menu)
-        if transient:
-            self.menu.dismissed.connect(self._maybe_quit)
-            QTimer(self, interval=1000, timeout=self._maybe_quit).start()
-            return
         self.watcher.start()
 
+        # files handed over by "Send to", the right-click menu, or a second launch
+        self._pending: list[str] = []
+        self._pending_timer = QTimer(self, singleShot=True, interval=280, timeout=self._flush_pending)
+        self.server = QLocalServer(self)
+        QLocalServer.removeServer(IPC_NAME)
+        self.server.listen(IPC_NAME)
+        self.server.newConnection.connect(self._ipc)
+
         self.tray = QSystemTrayIcon(make_icon(), self)
-        self.tray.setToolTip(f"{APP_NAME} — Shift while dragging a file")
+        self.tray.setToolTip(f"{APP_NAME} — press {self.trigger_label()} while dragging a file")
         m = QMenu()
         m.setStyleSheet(glass.QSS)
         self.act_enabled = QAction("Enabled", m, checkable=True, checked=True)
@@ -188,17 +132,53 @@ class DragShiftApp(QObject):
         m.addAction(self.act_enabled)
         m.addAction("Open a file…", self.open_dialog)
         m.addSeparator()
-        if IS_WIN:
-            self.act_auto = QAction("Start with Windows", m, checkable=True, checked=autostart_enabled())
-            self.act_auto.toggled.connect(set_autostart)
-            m.addAction(self.act_auto)
-        m.addAction("How to use", self.show_help)
+        m.addAction("Settings…", self.open_settings)
+        m.addAction("How to use", self.show_welcome)
         m.addSeparator()
-        m.addAction("Quit", self.qapp.quit)
+        m.addAction(f"Quit {APP_NAME}", self.qapp.quit)
         self.tray_menu = m
         self.tray.setContextMenu(m)
-        self.tray.activated.connect(lambda r: self.open_dialog() if r == QSystemTrayIcon.DoubleClick else None)
+        self.tray.activated.connect(self._tray_click)
         self.tray.show()
+
+    def trigger_label(self) -> str:
+        return dict(TRIGGERS).get(self.settings.get("trigger"), "Shift")
+
+    # ------------------------------------------------------------ IPC
+    def _ipc(self):
+        sock = self.server.nextPendingConnection()
+        if sock is None:
+            return
+
+        def read():
+            try:
+                data = json.loads(bytes(sock.readAll()).decode("utf-8") or "{}")
+            except Exception:
+                data = {}
+            files = [f for f in data.get("files", []) if os.path.exists(f)]
+            if files:
+                self.queue_files(files)
+            elif data.get("show"):
+                self.toasts.info("DragShift is already running",
+                                 f"Drag any file and press {self.trigger_label()}. It lives in the tray.")
+            sock.disconnectFromServer()
+
+        if sock.bytesAvailable():
+            read()
+        else:
+            sock.readyRead.connect(read)
+
+    def queue_files(self, files: list[str]):
+        """Explorer's right-click menu launches once per file: gather them, then show one menu."""
+        for f in files:
+            if f not in self._pending:
+                self._pending.append(f)
+        self._pending_timer.start()
+
+    def _flush_pending(self):
+        files, self._pending = self._pending, []
+        if files:
+            self.show_click_menu(files)
 
     # ------------------------------------------------------------ menu contents
     def describe(self, paths: list[str]) -> str:
@@ -212,14 +192,18 @@ class DragShiftApp(QObject):
             return {"Unsupported": []}
         ext = Path(paths[0]).suffix
         same = [p for p in paths if category(p) == cat]
-        convert_items = [Item(t, key=f"convert:{t}") for t in convert.targets_for(cat, ext)]
+        convert_items = []
+        for t in convert.targets_for(cat, ext):
+            hint = FORMAT_HINTS.get(t, "")
+            if cat == "image" and t == "PDF" and len(same) > 1:
+                hint = f"{len(same)} images → 1 PDF"
+            convert_items.append(Item(t, key=f"convert:{t}", hint=hint))
         rings: dict[str, list[Item]] = {"Convert": convert_items}
         if cat == "image":
-            names = ["Compress", "Metadata", "Redact", "Crop", "Edit", "Annotate", "Add BG"]
-            rings["Tools"] = [Item(n, GLYPHS[n], key=f"tool:{n}") for n in names]
+            rings["Tools"] = [Item(n, GLYPHS[n], key=f"tool:{n}", hint=HINTS[n]) for n in IMAGE_TOOLS]
         elif cat == "pdf":
-            names = ["Compress", "Metadata", "Split", "Rotate"] + (["Merge"] if len(same) > 1 else [])
-            rings["Tools"] = [Item(n, GLYPHS[n], key=f"tool:{n}") for n in names]
+            names = PDF_TOOLS[:3] + (["Merge"] if len(same) > 1 else []) + PDF_TOOLS[3:]
+            rings["Tools"] = [Item(n, GLYPHS[n], key=f"tool:{n}", hint=HINTS[n]) for n in names]
         return rings
 
     # ------------------------------------------------------------ actions
@@ -229,63 +213,89 @@ class DragShiftApp(QObject):
         kind, name = item.key.split(":", 1)
         if kind == "convert":
             if cat == "image" and name == "PDF" and len(paths) > 1:
-                self.submit(f"Combined {len(paths)} images into PDF",
-                            lambda: convert.images_to_single_pdf(paths))
-                return
-            for p in paths:
-                self.submit(f"{Path(p).name} → {name}", lambda p=p: convert.convert(p, cat, name))
+                self.submit(f"convert:{name}", paths, lambda: convert.images_to_single_pdf(paths),
+                            f"Combining {len(paths)} images…")
+            else:
+                verb = f"Converting to {name}…"
+                self.submit(f"convert:{name}", paths,
+                            lambda: [o for p in paths for o in convert.convert(p, cat, name)], verb)
             return
-        # tools
         if cat == "pdf":
-            fns = {
-                "Compress": lambda p: [imaging.compress_pdf(p)],
-                "Split": imaging.split_pdf,
-                "Rotate": lambda p: [imaging.rotate_pdf(p)],
-            }
             if name == "Merge":
-                self.submit(f"Merged {len(paths)} PDFs", lambda: [imaging.merge_pdfs(paths)])
+                self.submit("tool:Merge", paths, lambda: [imaging.merge_pdfs(paths)], "Merging…")
             elif name == "Metadata":
                 self.open_window(tools.MetadataWindow(paths[0], self.notify, is_pdf=True))
+            elif name == "Protect":
+                self.open_window(tools.ProtectWindow(paths[0], self.notify))
             else:
-                for p in paths:
-                    self.submit(f"{name}: {Path(p).name}", lambda p=p, f=fns[name]: f(p))
+                fns = {"Compress": lambda p: [imaging.compress_pdf(p)], "Split": imaging.split_pdf,
+                       "Rotate": lambda p: [imaging.rotate_pdf(p)], "Extract": imaging.extract_pdf_images}
+                f = fns[name]
+                self.submit(f"tool:{name}", paths, lambda: [o for p in paths for o in f(p)],
+                            {"Compress": "Compressing…", "Split": "Splitting…", "Rotate": "Rotating…",
+                             "Extract": "Extracting images…"}[name])
             return
         windows = {"Crop": tools.CropWindow, "Add BG": tools.AddBgWindow, "Annotate": tools.AnnotateWindow,
-                   "Redact": tools.RedactWindow, "Edit": tools.EditWindow,
-                   "Metadata": tools.MetadataWindow, "Compress": tools.CompressWindow}
+                   "Redact": tools.RedactWindow, "Edit": tools.EditWindow, "Metadata": tools.MetadataWindow}
         try:
-            self.open_window(windows[name](paths[0], self.notify))
+            if name == "Compress":
+                self.open_window(tools.CompressWindow(paths, self.notify))
+            elif name == "Resize":
+                self.open_window(tools.ResizeWindow(paths, self.notify))
+            else:
+                self.open_window(windows[name](paths[0], self.notify))
+        except UserError as e:
+            self.toasts.error(f"Couldn't open {name}", str(e))
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
-            self.toast.show_msg(f"Couldn't open {name}", str(e), error=True)
+            self.toasts.error(f"Couldn't open {name}", friendly_error(e))
 
     def open_window(self, w: QWidget):
+        if hasattr(w, "submit"):
+            w.submit = self.submit
         self.windows.append(w)
         w.destroyed.connect(lambda *_: self.windows.remove(w) if w in self.windows else None)
-        w.show()
-        w.raise_()
-        w.activateWindow()
+        if hasattr(w, "present"):
+            w.present()
+        else:
+            w.show()
 
-    def submit(self, title: str, fn):
-        job = Job(title, fn)
-        job.sig.done.connect(self.notify)
-        job.sig.failed.connect(lambda t, err: self.toast.show_msg(f"Failed: {t}", err, error=True))
+    def submit(self, action: str, srcs: list, fn, working: str = "Working…", extra: str = ""):
+        """Run in the background. A spinner card appears only if it takes > 150 ms."""
+        state = {"card": None, "finished": False}
+        names = Path(srcs[0]).name if len(srcs) == 1 else f"{len(srcs)} files"
+
+        def show_spinner():
+            if not state["finished"]:
+                state["card"] = self.toasts.new()
+                state["card"].working(working, names)
+
+        QTimer.singleShot(150, show_spinner)
+        job = Job(action, srcs, fn, extra)
+
+        def done(r):
+            state["finished"] = True
+            card = state["card"] or self.toasts.new()
+            card.done(r)
+
+        def failed(msg):
+            state["finished"] = True
+            card = state["card"] or self.toasts.new()
+            card.error("Couldn't finish", msg)
+
+        job.sig.done.connect(done)
+        job.sig.failed.connect(failed)
         self.pool.start(job)
 
-    def notify(self, title: str, outs: list):
-        outs = [str(o) for o in outs]
-        if not outs:
-            self.toast.show_msg(title, "Nothing was written")
-            return
-        sub = Path(outs[0]).name if len(outs) == 1 else f"{len(outs)} files · {Path(outs[0]).name} …"
-        self.toast.show_msg(title, sub + "   ·  click to show", outs[0])
-
-    def _maybe_quit(self):
-        if (self.transient and not self.menu.isVisible() and not self.windows
-                and self.pool.activeThreadCount() == 0 and not self.toast.isVisible()):
-            self.qapp.quit()
+    def notify(self, action: str, srcs: list, outs: list, extra: str = ""):
+        """Called by tool windows after they save."""
+        self.toasts.new().done(report.summarize(action, srcs, outs, extra))
 
     # ------------------------------------------------------------ misc
+    def _tray_click(self, reason):
+        if reason in (QSystemTrayIcon.DoubleClick, QSystemTrayIcon.Trigger):
+            self.open_dialog()
+
     def open_dialog(self):
         files, _ = QFileDialog.getOpenFileNames(None, "Choose file(s) for DragShift", QDir.homePath())
         if files:
@@ -297,9 +307,29 @@ class DragShiftApp(QObject):
         self.menu.popup(pos, files)
         self.menu.activateWindow()
 
-    def show_help(self):
-        self.toast.show_msg("Drag a file, then press Shift",
-                            "Drop it on a slice. Tap Shift again (or hover the centre) to switch Convert ⇄ Tools.")
+    def open_settings(self):
+        w = SettingsWindow(self.settings)
+        w.changed.connect(self._settings_changed)
+        self.open_window(w)
+
+    def _settings_changed(self):
+        self.watcher.set_key(self.settings.get("trigger"))
+        self.tray.setToolTip(f"{APP_NAME} — press {self.trigger_label()} while dragging a file")
+
+    def show_welcome(self):
+        self.open_window(WelcomeWindow(self.settings, self.trigger_label()))
+
+
+def send_to_running(payload: dict) -> bool:
+    s = QLocalSocket()
+    s.connectToServer(IPC_NAME)
+    if not s.waitForConnected(300):
+        return False
+    s.write(json.dumps(payload).encode("utf-8"))
+    s.flush()
+    s.waitForBytesWritten(500)
+    s.disconnectFromServer()
+    return True
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -313,22 +343,24 @@ def main(argv: list[str] | None = None) -> int:
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     qapp = QApplication(argv)
     qapp.setApplicationName(APP_NAME)
+    qapp.setApplicationVersion(VERSION)
     qapp.setQuitOnLastWindowClosed(False)
     qapp.setWindowIcon(make_icon())
 
     if "--selftest" in argv:
         return selftest()
-    files = [a for a in argv[1:] if not a.startswith("-") and os.path.exists(a)]
-    lock = QLockFile(os.path.join(QDir.tempPath(), "dragshift.lock"))
-    owner = lock.tryLock(100)
-    if not files and not owner:
-        return 0  # already running in the tray
-    app = DragShiftApp(qapp, transient=not owner)
+    files = [os.path.abspath(a) for a in argv[1:] if not a.startswith("-") and os.path.exists(a)]
+    # already running? hand over and exit (instant: no second UI start-up)
+    if send_to_running({"files": files} if files else {"show": "--quiet" not in argv}):
+        return 0
+    app = DragShiftApp(qapp)
     if files:  # e.g. "Send to → DragShift" or drag onto the .exe
-        QTimer.singleShot(150, lambda: app.show_click_menu(files))
+        QTimer.singleShot(120, lambda: app.queue_files(files))
+    elif not app.settings.get("welcomed"):
+        QTimer.singleShot(300, app.show_welcome)
     elif "--quiet" not in argv:
-        QTimer.singleShot(400, lambda: app.toast.show_msg(
-            "DragShift is running", "Drag any file, then press Shift. Find me in the tray."))
+        QTimer.singleShot(400, lambda: app.toasts.info(
+            "DragShift is running", f"Drag any file, then press {app.trigger_label()}."))
     return qapp.exec()
 
 
@@ -350,11 +382,18 @@ def selftest() -> int:
             convert.convert(docx, "docx", "TXT")
             imaging.add_background(convert.open_image(src), imaging.Background())
             imaging.compress_pdf(pdf)
+            imaging.protect_pdf(pdf, "pw")
+            from . import liquid
+            liquid.render(Image.new("RGB", (80, 80)), liquid.sdf_circle(80, 80, 40, 40, 30))
             menu = RadialMenu(lambda p: {"Convert": [Item("PNG")]}, lambda p: "1 KB")
             menu._load([str(src)])
-            for cls in (tools.CropWindow, tools.AddBgWindow, tools.EditWindow, tools.AnnotateWindow,
-                        tools.RedactWindow, tools.MetadataWindow, tools.CompressWindow):
-                cls(str(src), lambda *a: None).close()
+            n = lambda *a, **k: None
+            for w in (tools.CropWindow(str(src), n), tools.AddBgWindow(str(src), n), tools.EditWindow(str(src), n),
+                      tools.AnnotateWindow(str(src), n), tools.RedactWindow(str(src), n),
+                      tools.MetadataWindow(str(src), n), tools.CompressWindow([str(src)], n),
+                      tools.ResizeWindow([str(src)], n), tools.ProtectWindow(str(pdf), n)):
+                w.close()
+            ToastStack().info("ok", "ok").dismiss()
         print("SELFTEST OK")
         return 0
     except Exception:

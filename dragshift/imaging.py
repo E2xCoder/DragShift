@@ -8,7 +8,7 @@ from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 from PIL.ExifTags import GPSTAGS, TAGS
 
-from .convert import fitz, flatten, open_image, save_image
+from .convert import fitz, flatten, open_image, open_pdf, save_image
 from .util import sibling
 
 EXT_TARGET = {".jpg": "JPG", ".jpeg": "JPG", ".png": "PNG", ".webp": "WEBP", ".tif": "TIFF",
@@ -55,7 +55,7 @@ def compress_image(src: str | Path, quality: int = 72, max_side: int | None = No
 
 def compress_pdf(src: str | Path, image_dpi: int = 150, quality: int = 70) -> Path:
     out = sibling(src, "Compressed", ".pdf")
-    with fitz.open(src) as doc:
+    with open_pdf(src) as doc:
         try:
             doc.rewrite_images(dpi_threshold=image_dpi + 10, dpi_target=image_dpi,
                                quality=quality, lossy=True, lossless=True, bitonal=True,
@@ -65,6 +65,82 @@ def compress_pdf(src: str | Path, image_dpi: int = 150, quality: int = 70) -> Pa
         doc.save(out, garbage=4, deflate=True, deflate_images=True, deflate_fonts=True,
                  clean=True, use_objstms=1)
     return out
+
+
+def encode_size(im: Image.Image, target: str, quality: int) -> int:
+    """Bytes `im` would take saved as `target` at `quality` (PNG = palette-quantised)."""
+    buf = io.BytesIO()
+    if target == "PNG":
+        colors = max(16, min(256, int(quality * 2.56)))
+        im.convert("RGBA").quantize(colors=colors, method=Image.Quantize.FASTOCTREE).save(buf, "PNG", optimize=True)
+    else:
+        save_image(im, buf, target, quality=quality)
+    return buf.tell()
+
+
+def lossy_target(src: str | Path, to_webp: bool = False) -> str:
+    """Format a compressed copy is written in (BMP/TIFF/GIF/ICO become JPG)."""
+    if to_webp:
+        return "WEBP"
+    t = target_for(src)
+    return t if t in ("JPG", "PNG", "WEBP", "AVIF", "HEIC") else "JPG"
+
+
+def plan_target_size(im: Image.Image, target: str, max_bytes: int) -> tuple[int, int | None]:
+    """Find (quality, max_side) that fits under max_bytes: binary-search quality, then shrink."""
+    side = None
+    work = im
+    for _ in range(8):
+        lo, hi, best = 30, 92, None
+        while lo <= hi:
+            q = (lo + hi) // 2
+            if encode_size(work, target, q) <= max_bytes:
+                best, lo = q, q + 1
+            else:
+                hi = q - 1
+        if best is not None:
+            return best, side
+        side = int(max(work.size) * 0.8)
+        work = im.copy()
+        work.thumbnail((side, side), Image.LANCZOS)
+        if side < 200:
+            return 30, side
+    return 30, side
+
+
+def compress_to(src: str | Path, quality: int, max_side: int | None, target: str) -> Path:
+    im = open_image(src)
+    if max_side and max(im.size) > max_side:
+        im.thumbnail((max_side, max_side), Image.LANCZOS)
+    out = sibling(src, "Compressed", "." + ("jpg" if target == "JPG" else target.lower()))
+    if target == "PNG":
+        colors = max(16, min(256, int(quality * 2.56)))
+        im.convert("RGBA").quantize(colors=colors, method=Image.Quantize.FASTOCTREE,
+                                    dither=Image.Dither.FLOYDSTEINBERG).save(out, "PNG", optimize=True)
+    else:
+        save_image(im, out, target, quality=quality)
+    return out
+
+
+# ---------------------------------------------------------------- resize
+def resize_dims(size: tuple[int, int], mode: str, value: int) -> tuple[int, int]:
+    """mode: 'pct' (value %), 'long' (longest side px), 'w' (width px), 'h' (height px)."""
+    w, h = size
+    if mode == "pct":
+        k = value / 100
+    elif mode == "long":
+        k = value / max(w, h)
+    elif mode == "w":
+        k = value / w
+    else:
+        k = value / h
+    return max(1, round(w * k)), max(1, round(h * k))
+
+
+def resize_image(src: str | Path, dims: tuple[int, int]) -> Path:
+    im = open_image(src)
+    im = im.resize(dims, Image.LANCZOS)
+    return save_like(im, src, f"{dims[0]}x{dims[1]}")
 
 
 # ---------------------------------------------------------------- metadata
@@ -101,6 +177,85 @@ def _fmt(v) -> str:
     return s if len(s) < 120 else s[:117] + "…"
 
 
+def metadata_summary(src: str | Path) -> dict[str, str]:
+    """The handful of fields people actually care about, human-readable."""
+    out: dict[str, str] = {}
+    with Image.open(src) as im:
+        out["Size"] = f"{im.width} × {im.height}"
+        exif = im.getexif()
+        sub = {}
+        gps = {}
+        try:
+            sub = exif.get_ifd(0x8769)
+            gps = exif.get_ifd(0x8825)
+        except Exception:
+            pass
+        make, model = str(exif.get(0x010F, "")).strip(), str(exif.get(0x0110, "")).strip()
+        if make or model:
+            out["Camera"] = model if make and model.startswith(make) else f"{make} {model}".strip()
+        taken = sub.get(0x9003) or exif.get(0x0132)
+        if taken:
+            out["Taken"] = str(taken)
+        if exif.get(0x0131):
+            out["Software"] = str(exif.get(0x0131))
+        if sub.get(0x829A):
+            t = float(sub[0x829A])
+            out["Exposure"] = f"1/{round(1 / t)} s" if 0 < t < 1 else f"{t:g} s"
+        if sub.get(0x829D):
+            out["Aperture"] = f"f/{float(sub[0x829D]):.1f}"
+        if sub.get(0x8827):
+            out["ISO"] = str(sub[0x8827])
+        loc = gps_decimal(gps)
+        if loc:
+            out["Location"] = f"{loc[0]:.5f}, {loc[1]:.5f}"
+    return out
+
+
+def gps_decimal(gps) -> tuple[float, float] | None:
+    try:
+        def conv(v, ref):
+            d, m, s_ = (float(x) for x in v)
+            val = d + m / 60 + s_ / 3600
+            return -val if ref in ("S", "W") else val
+        return conv(gps[2], gps[1]), conv(gps[4], gps[3])
+    except Exception:
+        return None
+
+
+def count_metadata(src: str | Path) -> tuple[int, bool]:
+    """(number of EXIF/XMP/ICC entries, has GPS)."""
+    with Image.open(src) as im:
+        exif = im.getexif()
+        n = len(exif)
+        has_gps = False
+        try:
+            n += len(exif.get_ifd(0x8769))
+            g = exif.get_ifd(0x8825)
+            has_gps = bool(g)
+            n += len(g)
+        except Exception:
+            pass
+        n += sum(1 for k in ("xmp", "XML:com.adobe.xmp", "comment") if k in (im.info or {}))
+    return n, has_gps
+
+
+def strip_location(src: str | Path) -> Path:
+    """Remove only GPS tags, keep camera info and everything else."""
+    with Image.open(src) as im:
+        exif = im.getexif()
+        if 0x8825 in exif:
+            del exif[0x8825]
+        exif_bytes = exif.tobytes()
+    im = open_image(src)
+    out = sibling(src, "No Location", Path(src).suffix.lower() if Path(src).suffix.lower() in (".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff") else ".jpg")
+    # orientation already baked in by open_image → reset tag to 1
+    ex = Image.Exif()
+    ex.load(exif_bytes)
+    ex[0x0112] = 1
+    save_image(im, out, target_for(out), exif=ex.tobytes())
+    return out
+
+
 def strip_image_metadata(src: str | Path) -> Path:
     im = open_image(src)  # exif_transpose applied, so orientation is baked in
     clean = Image.new(im.mode, im.size)
@@ -109,7 +264,7 @@ def strip_image_metadata(src: str | Path) -> Path:
 
 
 def read_pdf_metadata(src: str | Path) -> dict[str, str]:
-    with fitz.open(src) as doc:
+    with open_pdf(src) as doc:
         info = {k: str(v) for k, v in (doc.metadata or {}).items() if v}
         info["Pages"] = str(doc.page_count)
         if doc.get_xml_metadata():
@@ -119,7 +274,7 @@ def read_pdf_metadata(src: str | Path) -> dict[str, str]:
 
 def strip_pdf_metadata(src: str | Path) -> Path:
     out = sibling(src, "Clean", ".pdf")
-    with fitz.open(src) as doc:
+    with open_pdf(src) as doc:
         doc.set_metadata({})
         try:
             doc.del_xml_metadata()
@@ -132,7 +287,7 @@ def strip_pdf_metadata(src: str | Path) -> Path:
 # ---------------------------------------------------------------- pdf extras
 def split_pdf(src: str | Path) -> list[Path]:
     outs = []
-    with fitz.open(src) as doc:
+    with open_pdf(src) as doc:
         for i in range(doc.page_count):
             nd = fitz.open()
             nd.insert_pdf(doc, from_page=i, to_page=i)
@@ -147,16 +302,66 @@ def merge_pdfs(srcs: list[str | Path]) -> Path:
     out = sibling(srcs[0], "Merged", ".pdf")
     nd = fitz.open()
     for s in srcs:
-        with fitz.open(s) as d:
+        with open_pdf(s) as d:
             nd.insert_pdf(d)
     nd.save(out, garbage=3, deflate=True)
     nd.close()
     return out
 
 
+def protect_pdf(src: str | Path, password: str) -> Path:
+    out = sibling(src, "Protected", ".pdf")
+    with open_pdf(src) as doc:
+        perms = int(fitz.PDF_PERM_ACCESSIBILITY | fitz.PDF_PERM_PRINT | fitz.PDF_PERM_COPY)
+        doc.save(out, encryption=fitz.PDF_ENCRYPT_AES_256, owner_pw=password, user_pw=password,
+                 permissions=perms, garbage=3, deflate=True)
+    return out
+
+
+def extract_pdf_images(src: str | Path) -> list[Path]:
+    from .util import output_dir, unique_path
+    folder = unique_path(output_dir(src) / f"{Path(src).stem} images")
+    outs: list[Path] = []
+    seen: set[int] = set()
+    with open_pdf(src) as doc:
+        for pno, page in enumerate(doc):
+            for img in page.get_images(full=True):
+                xref = img[0]
+                if xref in seen:
+                    continue
+                seen.add(xref)
+                try:
+                    info = doc.extract_image(xref)
+                except Exception:
+                    continue
+                if not info or info.get("width", 0) < 16:
+                    continue
+                folder.mkdir(exist_ok=True)
+                ext = info.get("ext", "png")
+                if ext not in ("jpg", "jpeg", "png"):
+                    pix = fitz.Pixmap(doc, xref)
+                    if pix.n - pix.alpha >= 4:
+                        pix = fitz.Pixmap(fitz.csRGB, pix)
+                    p = folder / f"page {pno + 1} image {len(outs) + 1}.png"
+                    pix.save(p)
+                else:
+                    p = folder / f"page {pno + 1} image {len(outs) + 1}.{ext}"
+                    p.write_bytes(info["image"])
+                outs.append(p)
+    if not outs:
+        from .util import UserError
+        raise UserError("No images found in this PDF.")
+    return outs
+
+
+def pdf_page_count(src: str | Path) -> int:
+    with fitz.open(src) as d:
+        return d.page_count
+
+
 def rotate_pdf(src: str | Path, degrees: int = 90) -> Path:
     out = sibling(src, "Rotated", ".pdf")
-    with fitz.open(src) as doc:
+    with open_pdf(src) as doc:
         for p in doc:
             p.set_rotation((p.rotation + degrees) % 360)
         doc.save(out)
@@ -199,6 +404,21 @@ class Adjust:
     flip_v: bool = False
     grayscale: bool = False
     resize_pct: int = 100
+
+
+def auto_enhance(im: Image.Image) -> Adjust:
+    """Pick gentle adjustments from the histogram (like a phone's 'auto' button)."""
+    from PIL import ImageStat
+    g = im.convert("L")
+    st = ImageStat.Stat(g)
+    mean, std = st.mean[0], st.stddev[0]
+    a = Adjust()
+    a.brightness = max(0.85, min(1.25, 1 + (118 - mean) / 400))
+    a.contrast = max(0.95, min(1.3, 1 + (58 - std) / 160))
+    sat = ImageStat.Stat(im.convert("HSV").split()[1]).mean[0]
+    a.saturation = max(1.0, min(1.3, 1 + (110 - sat) / 400))
+    a.sharpness = 1.15
+    return a
 
 
 def apply_adjust(im: Image.Image, a: Adjust) -> Image.Image:

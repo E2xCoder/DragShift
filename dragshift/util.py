@@ -37,9 +37,29 @@ def unique_path(path: str | Path) -> Path:
         i += 1
 
 
+class UserError(Exception):
+    """An error with a message that's fine to show the user as-is."""
+
+
+# Runtime options (filled from Settings at start-up; plain values so worker threads can read them)
+CONFIG = {
+    "output": "next",        # "next" = beside the original, "folder" = a "DragShift" subfolder
+    "jpg_quality": 90,
+    "pdf_dpi": 200,
+}
+
+
+def output_dir(src: str | Path) -> Path:
+    d = Path(src).parent
+    if CONFIG.get("output") == "folder":
+        d = d / "DragShift"
+        d.mkdir(exist_ok=True)
+    return d
+
+
 def sibling(src: str | Path, suffix_label: str = "", ext: str | None = None) -> Path:
-    """Output path next to `src`. sibling('a.jpg', 'Cropped') -> 'a Cropped.jpg'."""
-    s = Path(src)
+    """Output path for `src`. sibling('a.jpg', 'Cropped') -> 'a Cropped.jpg' (never overwrites)."""
+    s = output_dir(src) / Path(src).name
     stem = f"{s.stem} {suffix_label}".strip() if suffix_label else s.stem
     new_ext = ext if ext is not None else s.suffix
     if not new_ext.startswith("."):

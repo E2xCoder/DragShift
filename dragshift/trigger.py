@@ -11,7 +11,7 @@ from PySide6.QtGui import QCursor
 
 VK_LBUTTON, VK_SHIFT, VK_ESCAPE = 0x01, 0x10, 0x1B
 DRAG_THRESHOLD = 10   # px the mouse must travel with the button held
-NO_DRAG_TIMEOUT = 25  # ticks (≈ 0.75 s) to wait for a file drag to enter before hiding
+NO_DRAG_TIMEOUT = 50  # ticks (≈ 0.75 s) to wait for a file drag to enter before hiding
 
 
 class DragShiftWatcher(QObject):
@@ -24,13 +24,17 @@ class DragShiftWatcher(QObject):
         self.menu_visible = menu_visible
         self.menu_got_drag = menu_got_drag
         self.enabled = True
+        self.vk = VK_SHIFT
         self._down_at: QPoint | None = None
         self._shift_was = False
         self._fired = False
         self._idle_ticks = 0
         self._shown_at = QPoint()
         self._user32 = ctypes.windll.user32 if sys.platform == "win32" else None
-        self.timer = QTimer(self, interval=30, timeout=self._tick)
+        self.timer = QTimer(self, interval=15, timeout=self._tick)
+
+    def set_key(self, name: str):
+        self.vk = {"shift": VK_SHIFT, "ctrl": 0x11, "alt": 0x12}.get(name, VK_SHIFT)
 
     def start(self):
         if self._user32 is not None:
@@ -41,7 +45,7 @@ class DragShiftWatcher(QObject):
 
     def _tick(self):
         lbtn = self._down(VK_LBUTTON)
-        shift = self._down(VK_SHIFT)
+        shift = self._down(self.vk)
         pos = QCursor.pos()
 
         if self.menu_visible():
