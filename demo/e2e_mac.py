@@ -187,10 +187,11 @@ def calibrate(pos: dict, empty: Image.Image, full: Image.Image):
         cx = (xs[img_rows].mean() + max(0, x0)) / k
         cy = (ys[img_rows].mean() + max(0, y0)) / k
         offs.append((cx - x, cy - y))
+    # Finder's reported position is the icon centre (confirmed on screenshots); only log the
+    # measured blob offset for diagnostics
     if offs:
-        ICON_OFFSET[0] = int(sum(o[0] for o in offs) / len(offs))
-        ICON_OFFSET[1] = int(sum(o[1] for o in offs) / len(offs))
-    log("icon offset calibrated:", ICON_OFFSET, "from", len(offs), "icons")
+        log("measured blob offset (not applied):", int(sum(o[0] for o in offs) / len(offs)),
+            int(sum(o[1] for o in offs) / len(offs)))
 
 
 # ------------------------------------------------------------------ scenario

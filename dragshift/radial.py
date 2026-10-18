@@ -149,6 +149,13 @@ class RadialMenu(QWidget):
                 raw = glass.grab_screen(tl.x(), tl.y(), SIZE, SIZE)
                 if raw is None:
                     raise RuntimeError("capture failed")
+                from . import platform_mac
+                print("menu: mac windows at cursor:", "; ".join(platform_mac.LAST_SWEEP), flush=True)
+                if self.got_drag or paths is None:
+                    # belt and braces: Finder's drag picture (icon + name label) sits on the
+                    # cursor; erase that area — it ends up under the hub, blurred anyway
+                    cx, cy = pos.x() - tl.x(), pos.y() - tl.y()
+                    raw = glass.inpaint_rects(raw, [(cx - 70, cy - 64, cx + 70, cy + 64)])
                 shot = QPixmap.fromImage(glass.qimage_from_pil(raw))
             else:
                 with glass.hidden_drag_images() as hid:
