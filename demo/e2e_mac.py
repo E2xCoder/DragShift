@@ -113,16 +113,29 @@ def press_enter():
 
 
 # ------------------------------------------------------------------ desktop icons
+def unsort_desktop():
+    """Turn off Finder's desktop auto-arrange so icons stay where we put them."""
+    plist = str(Path.home() / "Library/Preferences/com.apple.finder.plist")
+    for cmd in ("Set :DesktopViewSettings:IconViewSettings:arrangeBy none",
+                "Add :DesktopViewSettings:IconViewSettings:arrangeBy string none"):
+        sh(["/usr/libexec/PlistBuddy", "-c", cmd, plist])
+    sh(["defaults", "write", "com.apple.finder", "CreateDesktop", "-bool", "true"])
+    sh(["killall", "Finder"])
+    time.sleep(4)
+
+
 def arrange(names: list[str]):
-    """Ask Finder where each desktop icon is (the desktop may be auto-sorted, so we don't
-    move them). Finder reports the icon position; the clickable icon image sits just
-    below/right of it, so we aim at the image centre."""
+    """Place icons in a column at known spots, then read back where Finder put them."""
+    for i, n in enumerate(names):
+        osa(f'tell application "Finder" to set position of item "{n}" of desktop to {{110, {120 + i * 120}}}')
     time.sleep(0.8)
     pos = {}
     for n in names:
         out = osa(f'tell application "Finder" to get position of item "{n}" of desktop')
         try:
             x, y = (int(v.strip()) for v in out.split(","))
+            if x < 0 or y < 0:
+                raise ValueError(out)
             pos[n] = (x, y)
         except Exception:
             log("no position for", n, repr(out))
@@ -318,6 +331,7 @@ def main():
     # clean desktop + sample files
     for p in DESK.glob("D-*"):
         shutil.rmtree(p) if p.is_dir() else p.unlink()
+    unsort_desktop()
     osa('tell application "Finder" to close every window')
     time.sleep(1.5)
     empty = Image.open(shot("00_empty"))
