@@ -198,7 +198,8 @@ def run(name: str, where: str, files: list[str], ring: str, label: str, verify, 
         else:
             src_xy = wk.item_center(container, files[0])
         sw, sh = pyautogui.size()
-        nudge = (min(640, sw - src_xy[0] - 260), 60 if src_xy[1] < sh - 400 else -260)
+        dy = 260 if src_xy[1] < 300 else (60 if src_xy[1] < sh - 400 else -260)
+        nudge = (min(640, sw - src_xy[0] - 260), dy)
         c = wk.drag_open_menu(src_xy, nudge)
         if ring_i == 1:
             wk.switch_ring()
@@ -491,7 +492,7 @@ def run_ipc(name: str, file: str, label: str, verify):
     try:
         sw, sh = pyautogui.size()
         wk.glide(int(sw * 0.62), int(sh * 0.45), 0.4)
-        c = pyautogui.position()
+        c = wk.menu_center(pyautogui.position())
         pyw = Path(sys.executable).with_name("pythonw.exe")
         env = dict(__import__("os").environ, DRAGSHIFT_RECORDING="1")
         subprocess.Popen([str(pyw), "-m", "dragshift", str(folder / file)], cwd=str(wk.ROOT), env=env)

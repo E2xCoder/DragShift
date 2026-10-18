@@ -22,6 +22,8 @@ def try_handoff(argv: list[str]) -> bool:
             path = "\\\\.\\pipe\\" + ipc_name()       # QLocalServer's named pipe: \\.\pipe\<name>
             with open(path, "wb", buffering=0) as f:
                 f.write(data)
+                import time
+                time.sleep(0.15)  # let the running copy read before the pipe closes
             return True
         import socket
         import tempfile

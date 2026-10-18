@@ -150,24 +150,36 @@ class DragShiftApp(QObject):
         sock = self.server.nextPendingConnection()
         if sock is None:
             return
+        buf = bytearray()
+        done = {"v": False}
 
-        def read():
+        def consume():
+            if done["v"]:
+                return
             try:
-                data = json.loads(bytes(sock.readAll()).decode("utf-8") or "{}")
+                buf.extend(bytes(sock.readAll()))
+            except RuntimeError:
+                pass
+            try:
+                data = json.loads(buf.decode("utf-8"))
             except Exception:
-                data = {}
+                return  # incomplete: wait for more
+            done["v"] = True
             files = [f for f in data.get("files", []) if os.path.exists(f)]
+            print(f"IPC: {len(files)} file(s) handed over", flush=True)
             if files:
                 self.queue_files(files)
             elif data.get("show"):
                 self.toasts.info("DragShift is already running",
                                  f"Drag any file and press {self.trigger_label()}. It lives in the tray.")
             sock.disconnectFromServer()
+            sock.deleteLater()
 
-        if sock.bytesAvailable():
-            read()
-        else:
-            sock.readyRead.connect(read)
+        # Windows pipes: the sender may already be gone, so read on every signal + a fallback timer
+        sock.readyRead.connect(consume)
+        sock.disconnected.connect(consume)
+        for ms in (0, 50, 200, 600):
+            QTimer.singleShot(ms, consume)
 
     def queue_files(self, files: list[str]):
         """Explorer's right-click menu launches once per file: gather them, then show one menu."""

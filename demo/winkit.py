@@ -251,12 +251,19 @@ def drag_open_menu(src, nudge=(620, 40), key="shift"):
     time.sleep(0.15)
     pyautogui.keyDown(key)
     time.sleep(0.3)
-    center = pyautogui.position()
-    pyautogui.moveTo(center[0] + 3, center[1] + 3)
+    cur = pyautogui.position()
+    pyautogui.moveTo(cur[0] + 3, cur[1] + 3)
     time.sleep(0.08)
-    pyautogui.moveTo(center[0], center[1])
+    pyautogui.moveTo(cur[0], cur[1])
     time.sleep(0.3)
-    return center
+    return menu_center(cur)
+
+
+def menu_center(cur, size=400):
+    """The menu is kept fully on screen, so near an edge its centre isn't the cursor."""
+    sw, sh = pyautogui.size()
+    half = size // 2
+    return (min(max(cur[0], half), sw - half), min(max(cur[1], half), sh - half))
 
 
 def switch_ring(key="shift"):
