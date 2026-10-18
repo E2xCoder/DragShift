@@ -1,0 +1,13 @@
+[   0.00] ChangeDisplaySettings -> 0
+[   0.00] STEP Drag any file, then press Shift
+[   3.83] STEP Liquid glass: the menu refracts what's behind it
+[  11.32] STEP Drop on a format: done instantly, with a summary
+[  14.84] STEP Tap Shift again for Tools
+[  25.21] STEP Compress to a target size, with a before/after preview
+[  32.74] STEP It tells you exactly how much it saved
+[  37.17] STEP Annotate: arrows, numbered steps, text
+[  55.15] STEP Metadata: see where a photo was taken, remove just that
+[  65.98] STEP Works on the Desktop too
+[  73.69] STEP 3 pages → 3 JPGs, right next to the PDF
+[  77.34] STEP Add BG: gradient backdrop in one drop
+[  98.22] done; files: ['Menu page 1.jpg', 'Menu page 2.jpg', 'Menu page 3.jpg', 'Menu.pdf', 'Report.pdf', 'Sunset Annotated.jpg', 'Sunset Compressed.jpg', 'Sunset No Location.jpg', 'Sunset With Background.png', 'Sunset.jpg', 'Sunset.webp']
