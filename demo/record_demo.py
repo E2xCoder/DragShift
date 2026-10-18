@@ -162,7 +162,8 @@ def find_window(title_re: str, timeout=15):
 
 
 def explorer_item_center(win, name: str):
-    item = win.child_window(title=name, control_type="ListItem")
+    stem = name.rsplit(".", 1)[0]
+    item = win.child_window(title_re=f"^{stem}(\\..*)?$", control_type="ListItem", found_index=0)
     item.wait("exists", timeout=10)
     r = item.rectangle()
     # aim at the icon, a bit above the label
@@ -261,6 +262,13 @@ def main() -> int:
     make_files()
     set_wallpaper()
     subprocess.run(["taskkill", "/F", "/IM", "ServerManager.exe"], capture_output=True)
+    # show file extensions so the video shows .pdf -> .jpg
+    subprocess.run(["reg", "add", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
+                    "/v", "HideFileExt", "/t", "REG_DWORD", "/d", "0", "/f"], capture_output=True)
+    user32.SendMessageTimeoutW(0xFFFF, 0x1A, 0, "Environment", 2, 1000, None)
+    # clear the desktop (minimise the runner console etc.)
+    pyautogui.hotkey("win", "d")
+    time.sleep(1.5)
 
     # open Explorer on the demo folder, large icons, left side of the screen
     subprocess.Popen(["explorer", str(DEMO)])
