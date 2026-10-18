@@ -234,6 +234,9 @@ def exclude_from_capture(hwnd: int) -> bool:
     """Hide a window from screen capture (Windows 10 2004+), so we can re-capture what's
     behind it while it's visible. Skipped while recording demos (it would hide us)."""
     import os
+    if sys.platform == "darwin":
+        from . import platform_mac
+        return platform_mac.OK      # macOS: we capture "below our window" instead
     if sys.platform != "win32" or os.environ.get("DRAGSHIFT_RECORDING"):
         return False
     try:
@@ -270,6 +273,28 @@ class _LiquidJob(QRunnable):
             traceback.print_exc()
 
 
+def grab_screen(x: int, y: int, w: int, h: int, below_window: int = 0):
+    """Screen pixels under a rect (logical coords) as a PIL image of size w×h.
+    macOS: native capture that leaves out the drag picture (and `below_window` and above)."""
+    if sys.platform == "darwin":
+        from . import platform_mac
+        if platform_mac.OK:
+            im = platform_mac.capture(x, y, w, h, below_window)
+            if im is not None:
+                return im
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QGuiApplication
+    scr = QGuiApplication.screenAt(QPoint(x + w // 2, y + h // 2)) or QGuiApplication.primaryScreen()
+    g = scr.geometry()
+    try:
+        shot = scr.grabWindow(0, x - g.x(), y - g.y(), w, h)
+    except Exception:
+        return None
+    if shot.isNull():
+        return None
+    return pil_from_qimage(shot.toImage().scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation))
+
+
 class LiquidBacking(QObject):
     """Keeps a refracted snapshot of whatever is behind a rounded-rect window."""
     changed = Signal()
@@ -288,19 +313,15 @@ class LiquidBacking(QObject):
 
     def capture_at(self, rect: QRect):
         """Grab the screen under `rect` (call before the window is shown, or when excluded)."""
-        from PySide6.QtGui import QGuiApplication
-        scr = QGuiApplication.screenAt(rect.center()) or QGuiApplication.primaryScreen()
-        g = scr.geometry()
-        dpr = scr.devicePixelRatio()
-        try:
-            shot = scr.grabWindow(0, rect.x() - g.x(), rect.y() - g.y(), rect.width(), rect.height())
-        except Exception:
+        below = 0
+        if sys.platform == "darwin" and self.w.isVisible():
+            from . import platform_mac
+            below = platform_mac.window_number(self.w)
+        pil = grab_screen(rect.x(), rect.y(), rect.width(), rect.height(), below)
+        if pil is None:
             return
-        if shot.isNull():
-            return
-        qi = shot.toImage().scaled(rect.width(), rect.height(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
         self._serial += 1
-        job = _LiquidJob(self._serial, pil_from_qimage(qi), rect.width(), rect.height(), self.radius, self.style)
+        job = _LiquidJob(self._serial, pil, rect.width(), rect.height(), self.radius, self.style)
         from .util import keep, release
         job.sig.done.connect(lambda *a, j=job: (release(j), self._done(*a)))
         QThreadPool.globalInstance().start(keep(job))

@@ -23,6 +23,7 @@ from .util import UserError, category, file_size, human_size, keep, release
 APP_NAME = "DragShift"
 VERSION = __version__
 IS_WIN = sys.platform == "win32"
+IS_MAC = sys.platform == "darwin"
 from .handoff import ipc_name
 IPC_NAME = ipc_name()
 
@@ -73,7 +74,7 @@ def friendly_error(e: Exception) -> str:
     msg = str(e) or e.__class__.__name__
     low = msg.lower()
     if isinstance(e, PermissionError) or "permission denied" in low:
-        return "Windows blocked writing next to the file. Try a folder you own, or set Settings → Save results → subfolder."
+        return "No permission to write next to this file. Try a folder you own, or set Settings → Save results → subfolder."
     if "cannot identify image" in low:
         return "This file doesn't look like an image DragShift can read."
     if isinstance(e, FileNotFoundError):
@@ -82,6 +83,33 @@ def friendly_error(e: Exception) -> str:
 
 
 # ---------------------------------------------------------------- icon
+def make_tray_icon() -> QIcon:
+    """macOS menu bar wants a monochrome 'template' image; Windows gets the colour icon."""
+    if not IS_MAC:
+        return make_icon()
+    pm = QPixmap(44, 44)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    from PySide6.QtGui import QPen
+    p.setPen(QPen(QColor(0, 0, 0), 4.5))
+    p.drawEllipse(QPointF(22, 22), 14, 14)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(0, 0, 0))
+    p.drawEllipse(QPointF(22, 22), 5, 5)
+    for a in range(0, 360, 45):  # petal gaps
+        import math
+        x, y = 22 + 14 * math.cos(math.radians(a + 22.5)), 22 + 14 * math.sin(math.radians(a + 22.5))
+        p.setCompositionMode(QPainter.CompositionMode_Clear)
+        p.drawEllipse(QPointF(x, y), 2.2, 2.2)
+        p.setCompositionMode(QPainter.CompositionMode_SourceOver)
+    p.end()
+    pm.setDevicePixelRatio(2.0)
+    icon = QIcon(pm)
+    icon.setIsMask(True)
+    return icon
+
+
 def make_icon() -> QIcon:
     ico = Path(__file__).with_name("assets") / "dragshift.ico"
     if ico.exists():
@@ -127,7 +155,7 @@ class DragShiftApp(QObject):
         self.server.listen(IPC_NAME)
         self.server.newConnection.connect(self._ipc)
 
-        self.tray = QSystemTrayIcon(make_icon(), self)
+        self.tray = QSystemTrayIcon(make_tray_icon(), self)
         self.tray.setToolTip(f"{APP_NAME} — press {self.trigger_label()} while dragging a file")
         m = QMenu()
         m.setStyleSheet(glass.QSS)
@@ -311,7 +339,8 @@ class DragShiftApp(QObject):
 
     # ------------------------------------------------------------ misc
     def _tray_click(self, reason):
-        if reason in (QSystemTrayIcon.DoubleClick, QSystemTrayIcon.Trigger):
+        # macOS: a click on the menu-bar icon shows the menu; Windows: click opens a file
+        if not IS_MAC and reason in (QSystemTrayIcon.DoubleClick, QSystemTrayIcon.Trigger):
             self.open_dialog()
 
     def open_dialog(self):
@@ -338,6 +367,37 @@ class DragShiftApp(QObject):
         self.open_window(WelcomeWindow(self.settings, self.trigger_label()))
 
 
+class DragShiftQApplication(QApplication):
+    """macOS delivers files from Finder's "Open With", the Dock and `open -a` as FileOpen
+    events (not argv)."""
+    file_opened = Signal(str)
+
+    def __init__(self, argv):
+        super().__init__(argv)
+        self.early_files: list[str] = []
+
+    def event(self, e):
+        from PySide6.QtCore import QEvent
+        if e.type() == QEvent.FileOpen:
+            f = e.file()
+            if f:
+                self.early_files.append(f)
+                self.file_opened.emit(f)
+            return True
+        return super().event(e)
+
+
+def mac_setup(qapp):
+    from PySide6.QtGui import QFont
+    for fam in ("Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI"):
+        QFont.insertSubstitutions(fam, [".AppleSystemUIFont", "SF Pro Display", "Helvetica Neue"])
+    try:
+        from . import platform_mac
+        platform_mac.become_accessory()
+    except Exception:
+        pass
+
+
 def send_to_running(payload: dict) -> bool:
     s = QLocalSocket()
     s.connectToServer(IPC_NAME)
@@ -353,7 +413,10 @@ def send_to_running(payload: dict) -> bool:
 def setup_logging():
     """Errors go to %LOCALAPPDATA%\\DragShift\\log.txt (pythonw / the .exe have no console)."""
     import faulthandler
-    base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share") / "DragShift"
+    if IS_MAC:
+        base = Path.home() / "Library" / "Logs" / "DragShift"
+    else:
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share") / "DragShift"
     base.mkdir(parents=True, exist_ok=True)
     path = base / "log.txt"
     if path.exists() and path.stat().st_size > 1_000_000:
@@ -383,7 +446,9 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
-    qapp = QApplication(argv)
+    qapp = DragShiftQApplication(argv)
+    if IS_MAC:
+        mac_setup(qapp)
     qapp.setApplicationName(APP_NAME)
     qapp.setApplicationVersion(VERSION)
     qapp.setQuitOnLastWindowClosed(False)
@@ -396,6 +461,9 @@ def main(argv: list[str] | None = None) -> int:
     if send_to_running({"files": files} if files else {"show": "--quiet" not in argv}):
         return 0
     app = DragShiftApp(qapp)
+    qapp.file_opened.connect(lambda f: app.queue_files([f]))
+    if qapp.early_files:
+        app.queue_files(list(qapp.early_files))
     if files:  # e.g. "Send to → DragShift" or drag onto the .exe
         QTimer.singleShot(120, lambda: app.queue_files(files))
     elif not app.settings.get("welcomed"):

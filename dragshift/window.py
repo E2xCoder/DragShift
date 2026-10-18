@@ -70,6 +70,9 @@ class GlassWindow(QWidget):
         self._placed = True
         self.liquid.capture_at(self.frameGeometry())
         self.show()
+        if sys.platform == "darwin":
+            from . import platform_mac
+            platform_mac.activate()   # menu-bar apps aren't brought forward automatically
         self.raise_()
         self.activateWindow()
 

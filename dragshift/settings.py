@@ -12,6 +12,7 @@ from .util import CONFIG
 from .window import GlassWindow
 
 IS_WIN = sys.platform == "win32"
+IS_MAC = sys.platform == "darwin"
 APP = "DragShift"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -57,6 +58,9 @@ def launch_command() -> str:
 
 
 def autostart_enabled() -> bool:
+    if IS_MAC:
+        from . import platform_mac
+        return platform_mac.autostart_enabled()
     if not IS_WIN:
         return False
     import winreg
@@ -69,6 +73,10 @@ def autostart_enabled() -> bool:
 
 
 def set_autostart(on: bool):
+    if IS_MAC:
+        from . import platform_mac
+        platform_mac.set_autostart(on)
+        return
     if not IS_WIN:
         return
     import winreg
@@ -82,7 +90,8 @@ def set_autostart(on: bool):
                 pass
 
 
-TRIGGERS = [("shift", "Shift"), ("ctrl", "Ctrl"), ("alt", "Alt")]
+TRIGGERS = ([("shift", "Shift ⇧"), ("ctrl", "Control ⌃"), ("alt", "Option ⌥")] if IS_MAC
+            else [("shift", "Shift"), ("ctrl", "Ctrl"), ("alt", "Alt")])
 OUTPUTS = [("next", "Next to the original"), ("folder", "In a “DragShift” subfolder")]
 DPIS = [(150, "150 dpi · small"), (200, "200 dpi · balanced"), (300, "300 dpi · print")]
 
@@ -142,12 +151,20 @@ class SettingsWindow(GlassWindow):
         grid.addWidget(self.dpi, r, 1)
         r += 1
 
-        if IS_WIN:
-            self.auto = QCheckBox("Start DragShift with Windows")
+        if IS_WIN or IS_MAC:
+            self.auto = QCheckBox("Start DragShift with Windows" if IS_WIN else "Open DragShift at login")
             self.auto.setChecked(autostart_enabled())
             self.auto.toggled.connect(set_autostart)
             grid.addWidget(self.auto, r, 1)
             r += 1
+        if IS_MAC:
+            from . import platform_mac
+            if not platform_mac.has_screen_recording():
+                glass_btn = QPushButton("Enable full liquid glass…")
+                glass_btn.setToolTip("Lets the glass refract the windows behind it (Screen Recording permission)")
+                glass_btn.clicked.connect(platform_mac.request_screen_recording)
+                grid.addWidget(glass_btn, r, 1)
+                r += 1
         self.body.addLayout(grid)
         self.body.addStretch(1)
         about = QLabel(f"DragShift {__version__}  ·  originals are never modified")
@@ -171,7 +188,7 @@ class WelcomeWindow(GlassWindow):
         super().__init__("Welcome to DragShift", size=(560, 430))
         self.s = settings
         steps = [
-            ("1", "Start dragging any file", "in File Explorer or on the desktop"),
+            ("1", "Start dragging any file", "in Finder or on the desktop" if IS_MAC else "in File Explorer or on the desktop"),
             ("2", f"Press {trigger_label}", "the glass menu opens right under your cursor"),
             ("3", "Drop it on a slice", "the result is saved next to the original"),
             ("⇄", f"Tap {trigger_label} again", "to switch between Convert and Tools"),
@@ -196,9 +213,20 @@ class WelcomeWindow(GlassWindow):
             row.addLayout(col, 1)
             self.body.addLayout(row)
         self.body.addStretch(1)
+        if IS_MAC:
+            from . import platform_mac
+            if not platform_mac.has_screen_recording():
+                note = QLabel("Optional: allow Screen Recording so the glass can refract the windows "
+                              "behind it (otherwise it shows your wallpaper). DragShift never saves or sends it.")
+                note.setObjectName("dim")
+                note.setWordWrap(True)
+                self.body.addWidget(note)
+                b = QPushButton("Allow Screen Recording…")
+                b.clicked.connect(platform_mac.request_screen_recording)
+                self.body.addWidget(b, 0, Qt.AlignLeft)
         foot = QHBoxLayout()
-        if IS_WIN:
-            self.auto = QCheckBox("Start with Windows")
+        if IS_WIN or IS_MAC:
+            self.auto = QCheckBox("Start with Windows" if IS_WIN else "Open at login")
             self.auto.setChecked(True)
             foot.addWidget(self.auto)
         foot.addStretch(1)
@@ -210,6 +238,6 @@ class WelcomeWindow(GlassWindow):
 
     def _done(self):
         self.s.set("welcomed", True)
-        if IS_WIN:
+        if IS_WIN or IS_MAC:
             set_autostart(self.auto.isChecked())
         self.close()

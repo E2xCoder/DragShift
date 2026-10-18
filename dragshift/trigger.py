@@ -1,6 +1,8 @@
-"""Watches for "left button held + mouse moved + Shift pressed" anywhere on Windows,
-which is what a Shift+drag of a file looks like. Polling GetAsyncKeyState is simple,
-needs no admin rights and can't stall the system the way a broken hook can."""
+"""Watches for "left button held + mouse moved + Shift pressed" anywhere on screen, which
+is what a Shift+drag of a file looks like. Polling global input state is simple, needs no
+admin rights and can't stall the system the way a broken hook can.
+Windows: GetAsyncKeyState. macOS: NSEvent.pressedMouseButtons / modifierFlags (no
+Accessibility or Input Monitoring permission required)."""
 from __future__ import annotations
 
 import ctypes
@@ -25,31 +27,43 @@ class DragShiftWatcher(QObject):
         self.menu_got_drag = menu_got_drag
         self.enabled = True
         self.vk = VK_SHIFT
+        self.key_name = "shift"
         self._down_at: QPoint | None = None
         self._shift_was = False
         self._fired = False
         self._idle_ticks = 0
         self._shown_at = QPoint()
         self._user32 = ctypes.windll.user32 if sys.platform == "win32" else None
+        self._mac = None
+        if sys.platform == "darwin":
+            from . import platform_mac
+            self._mac = platform_mac if platform_mac.OK else None
         self.timer = QTimer(self, interval=15, timeout=self._tick)
 
     def set_key(self, name: str):
+        self.key_name = name
         self.vk = {"shift": VK_SHIFT, "ctrl": 0x11, "alt": 0x12}.get(name, VK_SHIFT)
 
     def start(self):
-        if self._user32 is not None:
+        if self._user32 is not None or self._mac is not None:
             self.timer.start()
 
     def _down(self, vk: int) -> bool:
         return bool(self._user32.GetAsyncKeyState(vk) & 0x8000)
 
+    def _state(self) -> tuple[bool, bool, bool]:
+        """(left button, trigger key, escape)"""
+        if self._mac is not None:
+            m = self._mac
+            return m.left_button_down(), m.key_down(self.key_name), m.escape_down()
+        return self._down(VK_LBUTTON), self._down(self.vk), self._down(VK_ESCAPE)
+
     def _tick(self):
-        lbtn = self._down(VK_LBUTTON)
-        shift = self._down(self.vk)
+        lbtn, shift, esc = self._state()
         pos = QCursor.pos()
 
         if self.menu_visible():
-            if not lbtn or self._down(VK_ESCAPE):
+            if not lbtn or esc:
                 # drop happened (or was cancelled) – give the drop event a moment to land
                 QTimer.singleShot(120, self.hide_menu.emit)
             elif shift and not self._shift_was and self.menu_got_drag():

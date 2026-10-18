@@ -6,6 +6,7 @@ a cheap frosted version is drawn, so the menu still appears instantly."""
 from __future__ import annotations
 
 import math
+import sys
 from dataclasses import dataclass
 from typing import Callable
 
@@ -143,21 +144,28 @@ class RadialMenu(QWidget):
         self._serial += 1
         self.liquid = {}
         try:
-            with glass.hidden_drag_images() as hid:
-                shot = scr.grabWindow(0, tl.x() - g.left(), tl.y() - g.top(), SIZE, SIZE)
-            if hid.hwnds:
-                print(f"menu: hid {len(hid.hwnds)} drag image(s) during capture: {'; '.join(hid.info)}", flush=True)
-            elif hid.info:
-                print(f"menu: drag-image sweep: {'; '.join(hid.info)}", flush=True)
-            raw = glass.pil_from_qimage(
-                shot.toImage().scaled(SIZE, SIZE, Qt.IgnoreAspectRatio, Qt.SmoothTransformation))
-            if hid.rects:
-                # belt and braces: erase where the drag picture was, in case it was captured anyway
-                k = SIZE / max(1, shot.width())
-                local = [(int((x0 - tl.x()) * k), int((y0 - tl.y()) * k), int((x1 - tl.x()) * k), int((y1 - tl.y()) * k))
-                         for (x0, y0, x1, y1) in hid.rects]
-                raw = glass.inpaint_rects(raw, local)
+            if sys.platform == "darwin":
+                # macOS captures "below the drag window": the drag picture never gets in
+                raw = glass.grab_screen(tl.x(), tl.y(), SIZE, SIZE)
+                if raw is None:
+                    raise RuntimeError("capture failed")
                 shot = QPixmap.fromImage(glass.qimage_from_pil(raw))
+            else:
+                with glass.hidden_drag_images() as hid:
+                    shot = scr.grabWindow(0, tl.x() - g.left(), tl.y() - g.top(), SIZE, SIZE)
+                if hid.hwnds:
+                    print(f"menu: hid {len(hid.hwnds)} drag image(s) during capture: {'; '.join(hid.info)}", flush=True)
+                elif hid.info:
+                    print(f"menu: drag-image sweep: {'; '.join(hid.info)}", flush=True)
+                raw = glass.pil_from_qimage(
+                    shot.toImage().scaled(SIZE, SIZE, Qt.IgnoreAspectRatio, Qt.SmoothTransformation))
+                if hid.rects:
+                    # belt and braces: erase where the drag picture was, in case it was captured anyway
+                    k = SIZE / max(1, shot.width())
+                    local = [(int((x0 - tl.x()) * k), int((y0 - tl.y()) * k), int((x1 - tl.x()) * k), int((y1 - tl.y()) * k))
+                             for (x0, y0, x1, y1) in hid.rects]
+                    raw = glass.inpaint_rects(raw, local)
+                    shot = QPixmap.fromImage(glass.qimage_from_pil(raw))
             self._raw_backdrop = raw
             self.backdrop = glass.blur_pixmap(shot, 24)
         except Exception:

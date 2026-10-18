@@ -206,7 +206,8 @@ class ToastCard(QWidget):
             self.result = None
             self.thumb = None
             self.good = ""
-            self.info("Undone", f"Moved {n} file{'s' if n != 1 else ''} to the Recycle Bin", 2500)
+            bin_name = "Trash" if sys.platform == "darwin" else "Recycle Bin"
+            self.info("Undone", f"Moved {n} file{'s' if n != 1 else ''} to the {bin_name}", 2500)
 
     # ------------------------------------------------------------ paint
     def paintEvent(self, e):

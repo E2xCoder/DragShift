@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -83,31 +83,97 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DragShift-windows
+          name: windows
           path: |
             dist/DragShift.exe
             dist/DragShift-Setup.exe
 
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: apple-silicon
+          - runner: macos-15-intel
+            arch: intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller pytest
+
+      - name: Run tests
+        run: python -m pytest -q
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Build DragShift.app
+        run: pyinstaller DragShift.spec --noconfirm
+
+      - name: Self-test the app bundle
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          dist/DragShift.app/Contents/MacOS/DragShift --selftest
+          codesign --verify --deep --verbose=2 dist/DragShift.app || true
+          /usr/libexec/PlistBuddy -c "Print :LSUIElement" dist/DragShift.app/Contents/Info.plist
+
+      - name: Make the .dmg (drag DragShift to Applications)
+        run: |
+          mkdir -p dmg
+          cp -R dist/DragShift.app dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "DragShift" -srcfolder dmg -ov -format UDZO "dist/DragShift-mac-${{ matrix.arch }}.dmg"
+          du -h "dist/DragShift-mac-${{ matrix.arch }}.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-${{ matrix.arch }}
+          path: dist/DragShift-mac-${{ matrix.arch }}.dmg
+
+  publish:
+    needs: [windows, macos]
+    if: always() && github.event_name == 'push' && needs.windows.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+
+      - run: ls -la out
+
       - name: Publish download (latest)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: DragShift (latest build)
           make_latest: true
           body: |
-            **DragShift-Setup.exe** — recommended. Installs per-user (no admin), adds Start menu, start-with-Windows, right-click "DragShift…" and Send To.
-            **DragShift.exe** — portable, run from anywhere.
+            **Windows**
+            - **DragShift-Setup.exe** — recommended. Per-user install (no admin), Start menu, start with Windows, right-click "DragShift…" and Send To.
+            - **DragShift.exe** — portable.
+
+            **Mac** (macOS 11+)
+            - **DragShift-mac-apple-silicon.dmg** — M1/M2/M3/M4 Macs.
+            - **DragShift-mac-intel.dmg** — Intel Macs.
+            Open the .dmg and drag DragShift to Applications. First launch: right-click the app → **Open** (it isn't notarized by Apple yet).
 
             Built automatically from commit ${{ github.sha }}.
-          files: |
-            dist/DragShift.exe
-            dist/DragShift-Setup.exe
+          files: out/*
 
       - name: Publish tagged release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/DragShift.exe
-            dist/DragShift-Setup.exe
+          files: out/*
