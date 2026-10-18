@@ -56,6 +56,12 @@ Every push runs these jobs on GitHub's Windows and Mac machines:
 - **Mac builds:** `DragShift.app` and the .dmg for Apple Silicon and Intel, each self-tested inside the app bundle.
 - **Demo video:** pushing to the `demo` branch records a showcase video.
 
+## Support
+
+DragShift is free. If it saves you time, you can leave a tip on Cash App: [**$AtikaKadesha**](https://cash.app/$AtikaKadesha). Thank you!
+
+<img src="docs/tip-cashapp.png" alt="Cash App QR code for $AtikaKadesha" width="220">
+
 ## Run from source
 
 ```bash

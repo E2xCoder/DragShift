@@ -169,6 +169,8 @@ jobs:
             - **DragShift-mac-intel.dmg** — Intel Macs.
             Open the .dmg and drag DragShift to Applications. First launch: right-click the app → **Open** (it isn't notarized by Apple yet).
 
+            Enjoying DragShift? Tips are welcome: [Cash App $AtikaKadesha](https://cash.app/$AtikaKadesha) ♥
+
             Built automatically from commit ${{ github.sha }}.
           files: out/*
 
