@@ -15,9 +15,9 @@ IRIDESCENT = ["#ff6b9d", "#ffb36b", "#ffe66b", "#7dffb0", "#6bd5ff", "#8a7bff", 
 
 TEXT = "#ffffff"
 TEXT_DIM = "rgba(255,255,255,0.68)"
-ACCENT_A = "#ff8a5c"
-ACCENT_B = "#ff4f8b"
-ACCENT_C = "#8a6bff"
+ACCENT_A = "#5ac8ff"
+ACCENT_B = "#2f7bff"
+ACCENT_C = "#5b5bff"
 
 
 def iridescent_pen(center: QPointF, width: float, alpha: int = 200, angle: float = 30) -> QPen:
@@ -144,7 +144,7 @@ QPushButton#swatch {{ border-radius: 12px; padding: 0; min-width: 24px; max-widt
 QPushButton#swatch:checked {{ border: 2px solid #ffffff; }}
 QSlider::groove:horizontal {{ height: 4px; background: rgba(255,255,255,0.22); border-radius: 2px; }}
 QSlider::sub-page:horizontal {{
-  background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #ff9a6b, stop:0.5 #ff5f9a, stop:1 #8f7bff); border-radius: 2px;
+  background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {ACCENT_A}, stop:0.5 {ACCENT_B}, stop:1 {ACCENT_C}); border-radius: 2px;
 }}
 QSlider::handle:horizontal {{
   background: #ffffff; width: 14px; height: 14px; margin: -6px 0; border-radius: 7px;

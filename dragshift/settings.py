@@ -207,7 +207,7 @@ class WelcomeWindow(GlassWindow):
             badge = QLabel(n)
             badge.setAlignment(Qt.AlignCenter)
             badge.setFixedSize(34, 34)
-            badge.setStyleSheet("background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #ff8a5c, stop:1 #ff4f8b);"
+            badge.setStyleSheet("background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #5ac8ff, stop:1 #2f7bff);"
                                 "border-radius: 17px; font-weight: 700; font-size: 12pt;")
             row.addWidget(badge)
             col = QVBoxLayout()
