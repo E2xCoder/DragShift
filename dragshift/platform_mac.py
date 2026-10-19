@@ -170,3 +170,20 @@ def set_autostart(on: bool):
                            "RunAtLoad": True, "ProcessType": "Interactive"}, f)
     elif AGENT.exists():
         AGENT.unlink()
+
+
+# ---------------------------------------------------------------- drag pasteboard
+def drag_files() -> list[str]:
+    """Files being dragged right now, read from the system drag pasteboard.
+    macOS only tells a window about a drag once the cursor moves over it; reading the pasteboard
+    lets the menu show its slices the moment it opens, even if the mouse is held perfectly still."""
+    try:
+        import AppKit
+        from AppKit import NSPasteboard, NSURL
+        name = getattr(AppKit, "NSPasteboardNameDrag", None) or getattr(AppKit, "NSDragPboard", "Apple CFPasteboard drag")
+        pb = NSPasteboard.pasteboardWithName_(name)
+        urls = pb.readObjectsForClasses_options_([NSURL], {"NSPasteboardURLReadingFileURLsOnlyKey": True}) or []
+        out = [str(u.path()) for u in urls if u.isFileURL()]
+        return [p for p in out if os.path.exists(p)]
+    except Exception:
+        return []

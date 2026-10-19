@@ -263,6 +263,9 @@ def run(name, files, ring, label, verify, after_drop=None, multi=False):
         time.sleep(0.2)
         post_key(SHIFT_KEY, True, Quartz.kCGEventFlagMaskShift)
         time.sleep(0.4)
+        if not RESULTS:                       # first run: menu before the mouse moves at all
+            time.sleep(0.6)
+            shot("01_still_before_moving")
         cur = cursor()
         move(cur[0] + 3, cur[1] + 3, 0.05, dragging=True, flags=Quartz.kCGEventFlagMaskShift)
         move(cur[0], cur[1], 0.05, dragging=True, flags=Quartz.kCGEventFlagMaskShift)
@@ -360,7 +363,8 @@ def main():
     sh(["defaults", "write", "com.dragshift.DragShift", "welcomed", "-bool", "true"])
     sh(["defaults", "write", "DragShift", "welcomed", "-string", "true"])
     env = dict(os.environ, DRAGSHIFT_RECORDING="1")
-    app = subprocess.Popen([sys.executable, "-m", "dragshift", "--quiet"], cwd=str(ROOT), env=env)
+    app = subprocess.Popen([sys.executable, "-u", "-m", "dragshift", "--quiet"], cwd=str(ROOT), env=env,
+                           stdout=open(OUT / "app_stdout.txt", "w"), stderr=subprocess.STDOUT)
     time.sleep(6)
     POS = arrange(SOURCES)
     full = Image.open(shot("00_desktop"))
@@ -418,6 +422,14 @@ def main():
         logp = Path.home() / "Library" / "Logs" / "DragShift" / "log.txt"
         if logp.exists():
             shutil.copy(logp, OUT / "app_log.txt")
+        if True:
+            txt = (logp.read_text(errors="replace") if logp.exists() else "") + \
+                (OUT / "app_stdout.txt").read_text(errors="replace")
+            ok = "from the drag pasteboard" in txt
+            RESULTS.append({"name": "Slices filled before the mouse moves", "where": "mac desktop",
+                            "status": "PASS" if ok else "FAIL",
+                            "detail": "files read from the drag pasteboard" if ok else "pasteboard not read",
+                            "seconds": 0})
         passed = sum(r["status"] == "PASS" for r in RESULTS)
         (OUT / "results.json").write_text(json.dumps(RESULTS, indent=1))
         lines = [f"# DragShift macOS end-to-end — {passed}/{len(RESULTS)} passed", "",

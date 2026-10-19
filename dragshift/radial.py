@@ -188,8 +188,16 @@ class RadialMenu(QWidget):
         self.got_drag = False
         self.hub_armed = False  # drags start on the hub; don't flip until they leave it
         self.click_mode = paths is not None
+        early = []
+        if paths is None and sys.platform == "darwin":
+            from . import platform_mac
+            early = platform_mac.drag_files()
+            if early:
+                print(f"menu: {len(early)} file(s) from the drag pasteboard", flush=True)
         if paths is not None:
             self._load(paths)
+        elif early:
+            self._load(early)           # slices show at once; drop still comes via dragEnter
         else:
             self.paths, self.rings, self.ring_names = [], {}, []
             self.hub_text = "Drop here"
