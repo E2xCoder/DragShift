@@ -509,14 +509,12 @@ class RadialMenu(QWidget):
         # light blooming up from underneath the cursor
         glow_c = self.cursor_pos - off
         g = QRadialGradient(glow_c, 120)
-        g.setColorAt(0.0, QColor(255, 196, 120, int(150 * h)))
-        g.setColorAt(0.45, QColor(255, 90, 150, int(95 * h)))
-        g.setColorAt(1.0, QColor(130, 100, 255, int(40 * h)))
+        g.setColorAt(0.0, QColor(255, 255, 255, int(110 * h)))
+        g.setColorAt(0.45, QColor(255, 255, 255, int(60 * h)))
+        g.setColorAt(1.0, QColor(255, 255, 255, int(25 * h)))
         p.fillPath(path, g)
-        # brighter specular rim + iridescent edge while hovered
-        p.setPen(QPen(QColor(255, 255, 255, int(170 * h)), 1.3))
-        p.drawPath(path)
-        p.setPen(glass.iridescent_pen(c, 2.2, int(230 * h), angle=(a0 + a1) / 2))
+        # brighter specular rim while hovered
+        p.setPen(QPen(QColor(255, 255, 255, int(210 * h)), 1.6))
         p.drawPath(path)
         p.restore()
 
