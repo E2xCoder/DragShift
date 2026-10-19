@@ -49,7 +49,7 @@ Open **DragShift** from the app menu. It sits in the panel's notification area, 
 
 ## How to use
 
-1. Start dragging a file in File Explorer, Finder, your Linux file manager or on the desktop.
+1. Start dragging a file (an image, PDF, Word or text file; desktop shortcuts to one work too) in File Explorer, Finder, your Linux file manager or on the desktop.
 2. Press **Shift**. The menu opens under your cursor.
 3. Drop the file on a slice. The result is saved **next to the original**, and the original is never changed.
 4. To switch between **Convert** and **Tools**, tap **Shift** again.

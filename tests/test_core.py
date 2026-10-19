@@ -100,3 +100,16 @@ def test_paths(tmp_path):
     f.write_bytes(b"x")
     assert sibling(f, ext=".jpg").name == "a (1).jpg"
     assert category("x.HEIC") == "image" and category("x.pdf") == "pdf" and category("x.zip") is None
+
+
+@pytest.mark.skipif(__import__("sys").platform != "win32", reason="Windows shortcuts")
+def test_shortcut_resolves_to_target(img, tmp_path):
+    import win32com.client
+    from dragshift.util import resolve_shortcuts
+    lnk = tmp_path / "pic.lnk"
+    sc = win32com.client.Dispatch("WScript.Shell").CreateShortcut(str(lnk))
+    sc.TargetPath = str(img)
+    sc.Save()
+    out = resolve_shortcuts([str(lnk)])
+    assert Path(out[0]) == img and category(out[0]) == "image"
+    assert resolve_shortcuts([str(img)]) == [str(img)]

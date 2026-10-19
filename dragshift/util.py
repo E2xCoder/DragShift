@@ -24,6 +24,24 @@ def category(path: str | Path) -> str | None:
     return None
 
 
+def resolve_shortcuts(paths: list[str]) -> list[str]:
+    """Windows .lnk shortcuts (desktop icons) stand for the file they point to."""
+    if os.name != "nt" or not any(str(p).lower().endswith(".lnk") for p in paths):
+        return list(paths)
+    out = []
+    for p in paths:
+        if str(p).lower().endswith(".lnk"):
+            try:
+                import win32com.client  # type: ignore
+                target = win32com.client.Dispatch("WScript.Shell").CreateShortcut(str(p)).TargetPath
+                if target and os.path.isfile(target):
+                    p = target
+            except Exception:
+                pass
+        out.append(p)
+    return out
+
+
 def unique_path(path: str | Path) -> Path:
     """Return `path`, or `name (1).ext`, `name (2).ext`... if it already exists."""
     p = Path(path)

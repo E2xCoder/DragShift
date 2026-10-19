@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import (QEasingCurve, QObject, QPoint, QPointF, QRectF, QRunnable, Qt,
@@ -17,7 +18,7 @@ from PySide6.QtGui import (QColor, QCursor, QFont, QGuiApplication, QImage, QPai
 from PySide6.QtWidgets import QWidget
 
 from . import glass
-from .util import ui_family
+from .util import resolve_shortcuts, ui_family
 
 
 @dataclass
@@ -242,6 +243,7 @@ class RadialMenu(QWidget):
             self.update()
 
     def _load(self, paths: list[str]):
+        paths = resolve_shortcuts(paths)
         self.paths = paths
         self.rings = {k: v for k, v in self.build_rings(paths).items() if v}
         self.ring_names = list(self.rings)
@@ -359,7 +361,7 @@ class RadialMenu(QWidget):
             e.ignore()
             return
         self.got_drag = True
-        if paths != self.paths:
+        if resolve_shortcuts(paths) != self.paths:
             self._load(paths)
         e.setDropAction(Qt.CopyAction)  # never let a Shift(=move) drop delete the source
         e.accept()
@@ -455,8 +457,27 @@ class RadialMenu(QWidget):
                 self._paint_hover(p, c, a0, a1, h, img if have_liquid else None)
             self._petal_label(p, c, it, (a0 + a1) / 2 + rot, (R_IN + R_OUT) / 2 + h * 4, h,
                               fg, shadow_col)
+        if not n and self.paths:
+            self._paint_unsupported(p, c, fg, fg_dim, shadow_col)
 
         self._paint_hub(p, c, fg, fg_dim, shadow_col)
+
+    def _paint_unsupported(self, p: QPainter, c: QPointF, fg: QColor, fg_dim: QColor,
+                           shadow_col: QColor):
+        """Nothing to offer: say so in the top band, clear of the cursor and the drag image."""
+        ext = Path(self.paths[0]).suffix.lower() or "this file"
+        f = QFont(ui_family(True))
+        f.setPixelSize(13)
+        f.setBold(True)
+        p.setFont(f)
+        r_mid = (R_IN + R_OUT) / 2
+        self._text(p, QRectF(c.x() - R_OUT, c.y() - r_mid - 18, 2 * R_OUT, 18),
+                   f"Can't convert {ext}", fg, shadow_col)
+        f.setPixelSize(10)
+        f.setBold(False)
+        p.setFont(f)
+        self._text(p, QRectF(c.x() - R_OUT, c.y() - r_mid + 1, 2 * R_OUT, 16),
+                   "Images · PDF · Word · Text", fg_dim, None)
 
     def _paint_fallback(self, p: QPainter, c: QPointF, n: int):
         hub = QPainterPath()
