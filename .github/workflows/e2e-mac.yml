@@ -11,7 +11,11 @@ permissions:
 
 jobs:
   e2e-mac:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -51,12 +55,13 @@ jobs:
           mkdir -p /tmp/o && cp -r e2e_mac_out/* /tmp/o/ || true
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git checkout --orphan e2e-mac-output
+          B=e2e-mac-output; [ "${{ matrix.os }}" = "macos-26" ] && B=e2e-mac26-output
+          git checkout --orphan $B
           git rm -rfq . || true
           cp -r /tmp/o/* . || true
           git add -A
-          git commit -qm "macOS E2E results ${GITHUB_SHA}" || true
-          git push -f origin e2e-mac-output
+          git commit -qm "macOS E2E results ${GITHUB_SHA} (${{ matrix.os }})" || true
+          git push -f origin $B
 
   # macOS 26 (Tahoe): menu labels must render (issue #5). Screenshots of the menu from the
   # released build (before) and from this commit (after) go to the mac26-output branch.
