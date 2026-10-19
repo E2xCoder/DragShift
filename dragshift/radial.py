@@ -501,32 +501,18 @@ class RadialMenu(QWidget):
         p.translate(pc + off)
         p.scale(k, k)
         p.translate(-pc)
+        # only the glass itself moves: the slice's own refraction, enlarged — no added light
         if img is not None:
             p.save()
             p.setClipPath(path)
             p.drawImage(0, 0, img)
             p.restore()
-        # light blooming up from underneath the cursor
-        glow_c = self.cursor_pos - off
-        g = QRadialGradient(glow_c, 120)
-        g.setColorAt(0.0, QColor(255, 255, 255, int(110 * h)))
-        g.setColorAt(0.45, QColor(255, 255, 255, int(60 * h)))
-        g.setColorAt(1.0, QColor(255, 255, 255, int(25 * h)))
-        p.fillPath(path, g)
-        # brighter specular rim while hovered
-        p.setPen(QPen(QColor(255, 255, 255, int(210 * h)), 1.6))
-        p.drawPath(path)
+        else:
+            glass.paint_glass(p, path, self.backdrop, QPointF(0, 0), tint=QColor(22, 18, 34, 62),
+                              rainbow_alpha=140)
         p.restore()
 
     def _paint_hub(self, p: QPainter, c: QPointF, fg: QColor, fg_dim: QColor, shadow_col: QColor):
-        hs = self.hub_spring
-        if hs > 0.001:
-            g = QRadialGradient(c, R_HUB)
-            g.setColorAt(0, QColor(255, 255, 255, int(70 * hs)))
-            g.setColorAt(1, QColor(255, 255, 255, int(20 * hs)))
-            p.setPen(Qt.NoPen)
-            p.setBrush(g)
-            p.drawEllipse(c, R_HUB, R_HUB)
         p.setPen(glass.iridescent_pen(c, 1.2, 150, angle=60))
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(c, R_HUB - 0.5, R_HUB - 0.5)
