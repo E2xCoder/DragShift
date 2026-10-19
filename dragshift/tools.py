@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QColorDialog, QComboBox,
                                QVBoxLayout, QWidget)
 
 from . import imaging
+from .util import ui_family
 from .convert import open_image, open_preview
 from .glass import pil_from_qimage, qimage_from_pil
 from .util import file_size, human_size, sibling
@@ -258,7 +259,7 @@ class CropView(ImageView):
             p.drawEllipse(pt, 5.5, 5.5)
         # live output size badge
         txt = dims_text(round(self.sel.width() * self.k), round(self.sel.height() * self.k))
-        f = QFont("Segoe UI", 1)
+        f = QFont(ui_family(False))
         f.setPixelSize(12)
         f.setBold(True)
         p.setFont(f)
@@ -601,7 +602,7 @@ def draw_shape(p: QPainter, s: Shape, map_pt, scale: float):
     elif s.kind == "Ellipse" and len(pts) == 2:
         p.drawEllipse(QRectF(pts[0], pts[1]).normalized())
     elif s.kind == "Text" and pts:
-        f = QFont("Segoe UI", 1)
+        f = QFont(ui_family(False))
         f.setPixelSize(max(8, int(s.width * 5 * scale)))
         f.setBold(True)
         p.setFont(f)
@@ -618,7 +619,7 @@ def draw_shape(p: QPainter, s: Shape, map_pt, scale: float):
         p.setPen(QPen(QColor(255, 255, 255), max(1.5, r * 0.12)))
         p.setBrush(col)
         p.drawEllipse(c, r, r)
-        f = QFont("Segoe UI", 1)
+        f = QFont(ui_family(False))
         f.setPixelSize(int(r * 1.15))
         f.setBold(True)
         p.setFont(f)

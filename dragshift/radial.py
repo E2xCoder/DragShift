@@ -17,6 +17,7 @@ from PySide6.QtGui import (QColor, QCursor, QFont, QGuiApplication, QImage, QPai
 from PySide6.QtWidgets import QWidget
 
 from . import glass
+from .util import ui_family
 
 
 @dataclass
@@ -515,7 +516,7 @@ class RadialMenu(QWidget):
                 sub = f"⇧ {other.upper()}"
             else:
                 sub = ring_name.upper()
-        f = QFont("Segoe UI Variable Display", 1)
+        f = QFont(ui_family(True))
         f.setPixelSize(14)
         f.setBold(True)
         p.setFont(f)
@@ -544,7 +545,7 @@ class RadialMenu(QWidget):
         p.save()
         p.setOpacity(p.opacity() * (0.25 + 0.75 * self._swap))
         col = QColor(255, 255, 255) if h > 0.5 else fg   # hovered petal is warm-lit: white text
-        f = QFont("Segoe UI Variable Display", 1)
+        f = QFont(ui_family(True))
         if it.glyph:
             f.setPixelSize(int(18 + 3 * h))
             p.setFont(f)

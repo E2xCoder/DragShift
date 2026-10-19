@@ -57,3 +57,58 @@ jobs:
           git add -A
           git commit -qm "macOS E2E results ${GITHUB_SHA}" || true
           git push -f origin e2e-mac-output
+
+  # macOS 26 (Tahoe): menu labels must render (issue #5). Screenshots of the menu from the
+  # released build (before) and from this commit (after) go to the mac26-output branch.
+  labels-macos-26:
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          sw_vers
+
+      - name: Menu from the released build
+        run: |
+          mkdir -p out
+          python -c "from PIL import Image; Image.new('RGB',(800,600),(200,120,90)).save('/tmp/Photo.jpg')"
+          curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/install-mac.sh" | bash || true
+          sleep 6
+          /Applications/DragShift.app/Contents/MacOS/DragShift /tmp/Photo.jpg &
+          sleep 4
+          screencapture -x out/before_release.png || true
+          pkill -x DragShift || true
+          sleep 1
+
+      - name: Menu from this commit
+        run: |
+          python -m dragshift --quiet &
+          sleep 6
+          python -m dragshift /tmp/Photo.jpg
+          sleep 4
+          screencapture -x out/after_source.png
+          pkill -f "dragshift" || true
+          QT_QPA_PLATFORM=offscreen python -c "from PySide6.QtWidgets import QApplication; a=QApplication([]); from dragshift.app import check_text_renders; check_text_renders()" | tee out/fonts.txt
+
+      - name: Save to the mac26-output branch
+        if: always()
+        run: |
+          sw_vers > out/sw_vers.txt
+          mkdir -p /tmp/o && cp -r out/* /tmp/o/ || true
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git checkout --orphan mac26-output
+          git rm -rfq . || true
+          cp -r /tmp/o/* .
+          git add -A
+          git commit -qm "macOS 26 label check ${GITHUB_SHA}"
+          git push -f origin mac26-output

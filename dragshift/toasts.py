@@ -18,6 +18,7 @@ from PySide6.QtGui import (QColor, QCursor, QDesktopServices, QFont, QFontMetric
 from PySide6.QtWidgets import QWidget
 
 from . import glass
+from .util import ui_family
 from .report import Result
 
 W, H = 380, 104
@@ -253,7 +254,7 @@ class ToastCard(QWidget):
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(255, 255, 255, 34))
             p.drawEllipse(lead.center(), 22, 22)
-            f = QFont("Segoe UI", 1)
+            f = QFont(ui_family(False))
             f.setPixelSize(22)
             f.setBold(True)
             p.setFont(f)
@@ -262,7 +263,7 @@ class ToastCard(QWidget):
             x = 82
 
         tw = W - x - 34
-        f = QFont("Segoe UI Variable Display", 1)
+        f = QFont(ui_family(True))
         f.setPixelSize(15)
         f.setBold(True)
         p.setFont(f)
@@ -273,7 +274,7 @@ class ToastCard(QWidget):
         # highlighted figure chip (e.g. "75% smaller")
         if self.good:
             gx = x + fm.horizontalAdvance(title) + 8
-            f2 = QFont("Segoe UI", 1)
+            f2 = QFont(ui_family(False))
             f2.setPixelSize(11)
             f2.setBold(True)
             fm2 = QFontMetrics(f2)

@@ -115,8 +115,8 @@ def paint_glass(p: QPainter, path: QPainterPath, backdrop: QPixmap | None = None
 
 
 # ---------------------------------------------------------------- Qt stylesheet
-QSS = f"""
-* {{ color: {TEXT}; font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; font-size: 10pt; }}
+_QSS = f"""
+* {{ color: {TEXT}; font-family: "@FONT@", sans-serif; font-size: 10pt; }}
 QWidget#glassRoot {{ background: transparent; }}
 QLabel#title {{ font-size: 11pt; font-weight: 600; }}
 QLabel#dim, QLabel.dim {{ color: {TEXT_DIM}; font-size: 9pt; }}
@@ -175,6 +175,19 @@ QMenu {{ background: #2a2438; border: 1px solid rgba(255,255,255,0.25); border-r
 QMenu::item {{ padding: 6px 18px; border-radius: 5px; }}
 QMenu::item:selected {{ background: rgba(255,255,255,0.15); }}
 """
+
+
+def qss() -> str:
+    """The stylesheet, with a font family that is really installed (see util.ui_family)."""
+    from .util import ui_family
+    return _QSS.replace("@FONT@", ui_family(False))
+
+
+def __getattr__(name):        # keep `glass.QSS` working
+    if name == "QSS":
+        return qss()
+    raise AttributeError(name)
+
 
 
 # ---------------------------------------------------------------- Windows acrylic

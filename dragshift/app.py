@@ -391,9 +391,8 @@ class DragShiftQApplication(QApplication):
 
 
 def mac_setup(qapp):
-    from PySide6.QtGui import QFont
-    for fam in ("Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI"):
-        QFont.insertSubstitutions(fam, [".AppleSystemUIFont", "SF Pro Display", "Helvetica Neue"])
+    # fonts: util.ui_family picks a real installed family. (Substituting the private
+    # ".AppleSystemUIFont" made labels draw nothing on macOS 26.)
     try:
         from . import platform_mac
         platform_mac.become_accessory()
@@ -477,6 +476,24 @@ def main(argv: list[str] | None = None) -> int:
     return qapp.exec()
 
 
+def check_text_renders():
+    """Labels must really draw: paint text with the UI fonts and count the inked pixels."""
+    from PySide6.QtGui import QImage, QPainter, QColor
+    from .util import ui_font, ui_family
+    for display in (True, False):
+        img = QImage(200, 40, QImage.Format_ARGB32_Premultiplied)
+        img.fill(0)
+        p = QPainter(img)
+        p.setFont(ui_font(16, True, display))
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(img.rect(), Qt.AlignCenter, "WEBP 43.8 KB")
+        p.end()
+        inked = sum(1 for y in range(0, 40, 2) for x in range(0, 200, 2) if img.pixelColor(x, y).alpha() > 60)
+        print(f"font {ui_family(display)!r}: {inked} inked samples")
+        if inked < 30:
+            raise RuntimeError(f"text does not render with font {ui_family(display)!r}")
+
+
 def selftest() -> int:
     """Used by CI on the frozen .exe: exercise every library and build the UI, then exit."""
     import tempfile
@@ -507,6 +524,7 @@ def selftest() -> int:
                       tools.ResizeWindow([str(src)], n), tools.ProtectWindow(str(pdf), n)):
                 w.close()
             ToastStack().info("ok", "ok").dismiss()
+            check_text_renders()
         print("SELFTEST OK")
         return 0
     except Exception:

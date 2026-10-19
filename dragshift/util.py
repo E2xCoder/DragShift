@@ -97,3 +97,32 @@ def keep(job):
 
 def release(job):
     ALIVE.discard(job)
+
+
+# ---------------------------------------------------------------- fonts
+_FONT_FAMILY: dict[bool, str] = {}
+_DISPLAY = ["Segoe UI Variable Display", "Segoe UI", "SF Pro Display", "SF Pro", "Helvetica Neue",
+            "Inter", "Cantarell", "Noto Sans", "Ubuntu", "DejaVu Sans"]
+_TEXT = ["Segoe UI Variable Text", "Segoe UI", "SF Pro Text", "SF Pro", "Helvetica Neue",
+         "Inter", "Cantarell", "Noto Sans", "Ubuntu", "DejaVu Sans"]
+
+
+def ui_family(display: bool = True) -> str:
+    """First UI font that is really installed. Never ask Qt for a missing family: on macOS 26
+    an unknown family can resolve to a font that draws nothing (labels vanish)."""
+    if display not in _FONT_FAMILY:
+        from PySide6.QtGui import QFontDatabase
+        have = set(QFontDatabase.families())
+        pick = next((f for f in (_DISPLAY if display else _TEXT) if f in have), None)
+        if pick is None:
+            pick = QFontDatabase.systemFont(QFontDatabase.GeneralFont).family()
+        _FONT_FAMILY[display] = pick
+    return _FONT_FAMILY[display]
+
+
+def ui_font(px: int = 13, bold: bool = False, display: bool = True):
+    from PySide6.QtGui import QFont
+    f = QFont(ui_family(display))
+    f.setPixelSize(int(px))
+    f.setBold(bold)
+    return f
