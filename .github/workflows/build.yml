@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   windows:
@@ -87,6 +88,38 @@ jobs:
           path: |
             dist/DragShift.exe
             dist/DragShift-Setup.exe
+
+      # Test-mode SignPath code signing: the unsigned executables are uploaded
+      # as a ZIP artifact (upload-artifact archives by default, matching the
+      # zip-file root of the SignPath artifact configuration), a test-signing
+      # request is submitted and awaited, then the unsigned artifact is deleted
+      # again so the release keeps publishing exactly what it published before.
+      - name: Upload unsigned artifact for SignPath
+        id: upload-unsigned-artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned
+          path: |
+            dist/DragShift.exe
+            dist/DragShift-Setup.exe
+
+      - name: Submit test signing request to SignPath
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          organization-id: '9db07b33-5f87-47ac-b187-3dd1dfad5744'
+          project-slug: 'DragShift'
+          signing-policy-slug: 'test-signing'
+          artifact-configuration-slug: 'zip-with-signed-executables'
+          github-artifact-id: '${{ steps.upload-unsigned-artifact.outputs.artifact-id }}'
+          wait-for-completion: true
+          output-artifact-directory: 'signed'
+
+      - name: Delete unsigned artifact
+        if: always() && steps.upload-unsigned-artifact.outputs.artifact-id != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/${{ steps.upload-unsigned-artifact.outputs.artifact-id }}"
 
   macos:
     strategy:
@@ -255,7 +288,7 @@ jobs:
           xfwm4 --compositor=off >/tmp/xfwm4.log 2>&1 &
           sleep 2
           feh --no-fehbg --bg-fill /tmp/wall.png
-          /opt/venv/bin/python demo/e2e_linux.py || { tail -15 e2e_linux_out/log.txt | sed 's/%/%25/g' | while IFS= read -r l; do echo "::error title=e2e::$l"; done; exit 1; }
+          /opt/venv/bin/python demo/e2e_linux.py || { tail -15 e2e_linux_out/log.txt | sed 's/%/%25/g' | while IFS= read -r l; do echo "::error title=e2::$l"; done; exit 1; }
 
       - name: Summary
         if: always()
