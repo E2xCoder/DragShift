@@ -103,12 +103,6 @@ Every push runs these jobs on GitHub's Windows, Mac and Linux machines:
 - **Debian/XFCE:** builds the .deb on Debian 12, installs it, and runs the same kind of end-to-end test in Thunar under XFCE's window manager with the compositor **off**. Real XTest drags with Shift go through conversions, PDF tools, merging, the tool windows and Open With. The results and a recording are saved to the `e2e-linux-output` branch.
 - **Demo video:** pushing to the `demo` branch records a showcase video.
 
-## Support
-
-DragShift is free. If it saves you time, you can leave a tip on Cash App: [**$AtikaKadesha**](https://cash.app/$AtikaKadesha). Thank you!
-
-<img src="docs/tip-cashapp.png" alt="Cash App QR code for $AtikaKadesha" width="220">
-
 ## License
 
 [MIT](LICENSE): free to use, modify and share.
