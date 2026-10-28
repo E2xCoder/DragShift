@@ -4,6 +4,25 @@ Convert and edit files on **Windows, Mac and Linux** with a liquid-glass radial 
 
 ![DragShift radial menu and Add BG editor](docs/preview.png)
 
+## About this fork
+
+This is a personal fork of **[DragShift by llamaboi55](https://github.com/llamaboi55/DragShift)** (MIT). The
+original project and its design are theirs; this fork builds on top of it for Windows 11 and adds:
+
+- **Tools:** copy to clipboard, rename / number files, zip, watermark (text or logo, tiling), background removal
+  (Cutout), upscale / enhance with a local AI model, OCR with the built-in Windows engine, and one-click
+  **presets** (resize + format + size cap).
+- **Converters:** several images to an animated GIF or a contact sheet, Markdown / HTML to PDF and DOCX,
+  Word to Markdown, and video / audio conversion with ffmpeg.
+- **App:** extra **Files** and **Presets** rings in the menu, tool windows that remember their last settings,
+  optional right-click and Send to entries (Settings), and no welcome pop-up or tip menu item.
+
+The added libraries, the two bundled AI models and ffmpeg have their own licenses: see
+[`THIRD_PARTY.md`](THIRD_PARTY.md). This fork publishes no prebuilt releases, so the **Download** section below
+(kept from the original) does not apply here: its links point to this fork's empty Releases page. The
+original app's installers are on [the original project's releases](https://github.com/llamaboi55/DragShift/releases).
+To use this version, [run it from source](#run-from-source) or build it with `pyinstaller DragShift.spec`.
+
 ## Download
 
 From the [latest release](../../releases/latest):
