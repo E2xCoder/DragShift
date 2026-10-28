@@ -21,6 +21,7 @@ DEFAULTS = {
     "output": "next",
     "jpg_quality": 90,
     "pdf_dpi": 200,
+    "ocr_lang": "",          # "" = automatic (first Windows language with an OCR pack)
     "trigger": "shift",
     "welcomed": False,
 }
@@ -47,7 +48,7 @@ class Settings:
         self.apply()
 
     def apply(self):
-        for k in ("output", "jpg_quality", "pdf_dpi"):
+        for k in ("output", "jpg_quality", "pdf_dpi", "ocr_lang"):
             CONFIG[k] = self.get(k)
 
 
@@ -108,7 +109,7 @@ class SettingsWindow(GlassWindow):
     changed = Signal()
 
     def __init__(self, settings: Settings):
-        super().__init__("Settings", size=(520, 470))
+        super().__init__("Settings", size=(520, 700))
         self.s = settings
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
@@ -159,12 +160,53 @@ class SettingsWindow(GlassWindow):
         grid.addWidget(self.dpi, r, 1)
         r += 1
 
+        from . import ocr
+        if ocr.available():
+            grid.addWidget(QLabel("Text recognition (OCR)"), r, 0)
+            langs = [("", "Automatic (Windows language)")] + ocr.languages()
+            self.ocr_lang = combo(langs, self.s.get("ocr_lang"))
+            self.ocr_lang.currentIndexChanged.connect(lambda _: self._save("ocr_lang", self.ocr_lang.currentData()))
+            grid.addWidget(self.ocr_lang, r, 1)
+            r += 1
+            hint = QLabel("Reads one language at a time. Pick the language of your scans.")
+            hint.setObjectName("dim")
+            grid.addWidget(hint, r, 1)
+            r += 1
+
+        grid.addWidget(QLabel("Tool windows"), r, 0)
+        self.forget_btn = QPushButton("Forget remembered settings")
+        self.forget_btn.setToolTip("Watermark text, rename pattern, upscale size… are remembered between uses")
+        self.forget_btn.clicked.connect(self._forget)
+        grid.addWidget(self.forget_btn, r, 1)
+        r += 1
+        self.forget_note = QLabel("Watermark, Rename and Upscale start with what you used last.")
+        self.forget_note.setObjectName("dim")
+        self.forget_note.setWordWrap(True)
+        grid.addWidget(self.forget_note, r, 1)
+        r += 1
+
         if IS_WIN or IS_MAC or IS_LINUX:
             self.auto = QCheckBox("Start DragShift with Windows" if IS_WIN else "Open DragShift at login")
             self.auto.setChecked(autostart_enabled())
             self.auto.toggled.connect(set_autostart)
             grid.addWidget(self.auto, r, 1)
             r += 1
+        if IS_WIN:
+            from . import shellmenu
+            self.ctx = QCheckBox("Add “DragShift…” to the right-click menu")
+            self.send = QCheckBox("Add DragShift to the “Send to” menu")
+            self.ctx.clicked.connect(lambda on: self._shell_toggle("context", on))
+            self.send.clicked.connect(lambda on: self._shell_toggle("sendto", on))
+            grid.addWidget(self.ctx, r, 1)
+            r += 1
+            grid.addWidget(self.send, r, 1)
+            r += 1
+            self.shell_note = QLabel()
+            self.shell_note.setObjectName("dim")
+            self.shell_note.setWordWrap(True)
+            grid.addWidget(self.shell_note, r, 1)
+            r += 1
+            self._shell_refresh()
         if IS_MAC:
             from . import platform_mac
             if not platform_mac.has_screen_recording():
@@ -185,6 +227,40 @@ class SettingsWindow(GlassWindow):
         done.clicked.connect(self.close)
         foot.addWidget(done)
         self.body.addLayout(foot)
+
+    # ------------------------------------------------------------ Explorer menus (Windows)
+    SHELL_HINT = ("On Windows 11 the right-click entry is under “Show more options” (or press Shift+F10). "
+                  "Only your own account is changed, and unticking removes it.")
+
+    def _shell_refresh(self, message: str = ""):
+        from . import shellmenu
+        st = shellmenu.status()
+        for box, state in ((self.ctx, st.context), (self.send, st.sendto)):
+            box.blockSignals(True)
+            box.setChecked(state == "ours")
+            box.blockSignals(False)
+        other = [t for s, t in ((st.context, st.context_target), (st.sendto, st.sendto_target)) if s == "other"]
+        extra = (f" Another copy of DragShift ({other[0]}) owns an entry: tick the box to take it over." if other else "")
+        self.shell_note.setText(message or (self.SHELL_HINT + extra))
+
+    def _shell_toggle(self, which: str, on: bool):
+        from . import shellmenu
+        from .util import UserError
+        try:
+            if which == "context":
+                shellmenu.enable_context(replace=True) if on else shellmenu.disable_context()
+            else:
+                shellmenu.enable_sendto(replace=True) if on else shellmenu.disable_sendto()
+        except UserError as e:
+            self._shell_refresh(str(e))
+            return
+        self._shell_refresh()
+
+    def _forget(self):
+        from . import remember
+        n = remember.forget_all()
+        self.forget_note.setText(f"Forgot the settings of {n} tool{'s' if n != 1 else ''}." if n
+                                 else "Nothing was remembered yet.")
 
     def _save(self, key, value):
         self.s.set(key, value)

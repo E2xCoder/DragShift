@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from .util import category, file_size, human_size
 
@@ -15,6 +16,7 @@ class Result:
     outs: list[Path]
     srcs: list[Path] = field(default_factory=list)
     good: str = ""     # highlighted figure, e.g. "−75%"
+    undo: Callable[[], int] | None = None   # replaces "move outputs to the bin" (e.g. Rename)
 
     @property
     def thumb(self) -> Path | None:
@@ -71,6 +73,23 @@ def summarize(action: str, srcs: list, outs: list, extra: str = "") -> Result:
     o0 = outs[0]
     good = ""
 
+    if kind == "preset":
+        d0, d1 = dims(src), dims(o0)
+        if len(outs) > 1:
+            return Result(f"{name}: {len(outs)} images", f"{human_size(before)} → {human_size(after)}", outs, srcs)
+        sizes, verdict = size_change(before, after)
+        detail = (f"{_dim_str(d0)} → {_dim_str(d1)} · " if d0 and d1 and d0 != d1 else "") + sizes
+        return Result(f"{name} preset", f"{detail} · {o0.name}", outs, srcs,
+                      good=verdict if verdict.endswith("smaller") else "")
+
+    if kind == "convert" and name == "OCR":
+        if o0.suffix.lower() == ".txt":
+            words = len(o0.read_text(encoding="utf-8", errors="replace").split())
+            return Result("Text recognised", f"{words} words · {o0.name}", outs, srcs)
+        n = pages(o0)
+        return Result("Searchable PDF", f"{n} page{'s' if n != 1 else ''} · {o0.name}", outs, srcs,
+                      good="text layer added")
+
     if kind == "convert":
         fmt = name
         if len(srcs) > 1 and len(outs) == 1:
@@ -90,6 +109,12 @@ def summarize(action: str, srcs: list, outs: list, extra: str = "") -> Result:
             n = pages(o0)
             if n:
                 bits.append(f"{n} page{'s' if n != 1 else ''}")
+        if category(o0) in ("video", "audio") and len(outs) == 1:
+            from . import media
+            try:
+                bits.append(media.clock(media.probe(o0).duration))
+            except Exception:      # noqa: BLE001  (the length is a nicety, never worth failing the report)
+                pass
         bits.append(human_size(after))
         return Result(title, " · ".join(bits), outs, srcs)
 
@@ -123,6 +148,40 @@ def summarize(action: str, srcs: list, outs: list, extra: str = "") -> Result:
     if name == "Metadata":
         return Result("Metadata removed", f"{extra} · {o0.name}" if extra else o0.name, outs, srcs,
                       good="private copy")
+
+    if name == "Upscale":
+        d0, d1 = dims(src), dims(o0)
+        k = d1[0] / d0[0] if d0 and d1 else 1
+        title = "Enhanced" if abs(k - 1) < 0.05 else f"Upscaled {k:g}×"
+        if len(outs) > 1:
+            return Result(f"{title.split(' ')[0]} {len(outs)} images", f"{o0.name} …", outs, srcs)
+        return Result(title, f"{_dim_str(d0)} → {_dim_str(d1)} · {o0.name}", outs, srcs, good="AI upscale")
+
+    if name == "Mute":
+        return Result("Sound removed", f"{o0.name} · {human_size(after)}", outs, srcs,
+                      good="picture untouched")
+
+    if name == "Watermark":
+        title = f"Watermark added to {len(outs)} files" if len(outs) > 1 else "Watermark added"
+        n = pages(o0) if o0.suffix.lower() == ".pdf" else None
+        bits = [o0.name] + ([f"{n} page{'s' if n != 1 else ''}"] if n else []) + [human_size(after)]
+        return Result(title, " · ".join(bits), outs, srcs)
+
+    if name == "Cutout":
+        title = f"Background removed from {len(outs)} images" if len(outs) > 1 else "Background removed"
+        return Result(title, f"{o0.name} · {human_size(after)}", outs, srcs, good="transparent PNG")
+
+    if name == "Zip":
+        sizes, verdict = size_change(before, after)
+        return Result(f"Zipped {len(srcs)} file{'s' if len(srcs) != 1 else ''}", f"{o0.name} · {sizes}",
+                      outs, srcs, good=verdict if verdict.endswith("smaller") else "")
+
+    if name == "Rename":
+        from . import rename
+        olds, news = list(srcs), list(outs)
+        detail = f"{olds[0].name}  →  {o0.name}" if len(outs) == 1 else f"{o0.name} … {outs[-1].name}"
+        return Result(f"Renamed {len(outs)} file{'s' if len(outs) != 1 else ''}", detail, outs, srcs,
+                      undo=lambda: rename.undo(olds, news))
 
     if name == "Split":
         return Result(f"Split into {len(outs)} PDFs", f"{o0.name} …", outs, srcs)

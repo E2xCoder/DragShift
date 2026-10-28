@@ -25,8 +25,12 @@ except ImportError:  # pragma: no cover
 
 IMAGE_TARGETS = ["PNG", "JPG", "WEBP", "HEIC", "TIFF", "AVIF", "BMP", "PDF", "ICO", "GIF"]
 PDF_TARGETS = ["JPG", "PNG", "DOCX", "TXT"]
-DOCX_TARGETS = ["PDF", "TXT"]
+DOCX_TARGETS = ["PDF", "TXT", "MD", "HTML"]
 TEXT_TARGETS = ["PDF", "DOCX"]
+MARKDOWN_TARGETS = ["PDF", "DOCX", "HTML"]          # .md is rendered, see documents.py
+HTML_TARGETS = ["PDF", "DOCX", "MD", "TXT"]
+VIDEO_TARGETS = ["MP4", "WEBM", "GIF", "MP3", "WAV"]       # the audio ones extract the sound; see media.py
+AUDIO_TARGETS = ["MP3", "WAV", "FLAC", "M4A", "OGG"]
 
 PIL_FORMAT = {"PNG": "PNG", "JPG": "JPEG", "WEBP": "WEBP", "HEIC": "HEIF", "TIFF": "TIFF",
               "AVIF": "AVIF", "BMP": "BMP", "PDF": "PDF", "ICO": "ICO", "GIF": "GIF"}
@@ -102,6 +106,35 @@ def save_image(im: Image.Image, out: Path, target: str, quality: int | None = No
     atomic_save(lambda dst: im.save(dst, fmt, **kw), out)
 
 
+_SAME_FORMAT = {".jpg": "JPG", ".jpeg": "JPG", ".png": "PNG", ".webp": "WEBP", ".heic": "HEIC", ".heif": "HEIC",
+                ".tif": "TIFF", ".tiff": "TIFF", ".avif": "AVIF", ".bmp": "BMP", ".gif": "PNG", ".ico": "PNG"}
+
+
+def save_like_source(im: Image.Image, src: str | Path, label: str) -> Path:
+    """Save an edited copy of `src` next to it as '<name> <label>.<ext>', in the same format
+    (GIF and ICO become PNG) and with the camera info kept. Never overwrites."""
+    src = Path(src)
+    target = _SAME_FORMAT.get(src.suffix.lower(), "PNG")
+    if target == "HEIC" and not HEIF_OK:
+        target = "PNG"
+    out = sibling(src, label, ".jpg" if target == "JPG" else "." + target.lower())
+    save_image(im, out, target, exif=upright_exif(src))
+    return out
+
+
+def upright_exif(src: str | Path):
+    """The camera info of `src` (or None), with the rotation flag reset because open_image already
+    turned the picture upright. Use it when saving an image that came from open_image(src)."""
+    try:
+        with Image.open(src) as o:
+            exif = o.getexif() or None
+            if exif is not None:
+                exif[0x0112] = 1
+            return exif
+    except Exception:      # noqa: BLE001
+        return None
+
+
 def atomic_save(write, out):
     """Write to a hidden temp file, then rename: Explorer never shows a half-written file."""
     import os
@@ -157,6 +190,10 @@ def pdf_to_images(src: str | Path, target: str, dpi: int | None = None) -> list[
 def pdf_to_txt(src: str | Path) -> list[Path]:
     with open_pdf(src) as doc:
         text = "\n\f\n".join(page.get_text("text") for page in doc)
+    if not text.replace("\f", "").strip():          # a scan: no text layer, so read the pages
+        from . import ocr
+        if ocr.available():
+            text = ocr.pdf_ocr_text(src)
     out = sibling(src, ext=".txt")
     out.write_text(text, encoding="utf-8")
     return [out]
@@ -299,12 +336,16 @@ h1 { font-size: 20pt; } h2 { font-size: 16pt; } h3 { font-size: 13pt; }
 p { margin: 0 0 6pt 0; }
 pre { font-family: monospace; font-size: 9.5pt; white-space: pre-wrap; }
 table { border-collapse: collapse; margin: 6pt 0; }
-td { border: 1px solid #888; padding: 3pt 5pt; font-size: 10pt; }
+td, th { border: 1px solid #888; padding: 3pt 5pt; font-size: 10pt; }
+th { font-weight: bold; }
+code { font-family: monospace; }
+blockquote { margin-left: 14pt; color: #555; }
 """
 
 
-def html_to_pdf(body_html: str, out: Path) -> None:
-    story = fitz.Story(html=body_html, user_css=CSS)
+def html_to_pdf(body_html: str, out: Path, archive=None) -> None:
+    """`archive` (a fitz.Archive of a folder) lets relative <img src> paths resolve."""
+    story = fitz.Story(html=body_html, user_css=CSS, archive=archive)
     writer = fitz.DocumentWriter(str(out))
     mediabox = fitz.paper_rect("letter")
     where = mediabox + (54, 54, -54, -54)
@@ -361,12 +402,35 @@ def targets_for(cat: str, src_ext: str) -> list[str]:
         t = [x for x in IMAGE_TARGETS if x != cur]
         if not HEIF_OK:
             t = [x for x in t if x != "HEIC"]
-        return t
-    return {"pdf": PDF_TARGETS, "docx": DOCX_TARGETS, "text": TEXT_TARGETS}.get(cat, [])
+        return t + _ocr_target()
+    if cat in ("video", "audio"):
+        from . import media
+        if not media.available():
+            return []
+        return [t for t in (VIDEO_TARGETS if cat == "video" else AUDIO_TARGETS) if t != cur]
+    if cat == "text" and src_ext == "md":
+        return MARKDOWN_TARGETS
+    if cat == "text" and src_ext in ("html", "htm"):
+        return HTML_TARGETS
+    if cat == "pdf":
+        return PDF_TARGETS + _ocr_target()
+    return {"docx": DOCX_TARGETS, "text": TEXT_TARGETS}.get(cat, [])
+
+
+def _ocr_target() -> list[str]:
+    """OCR is offered only where the platform can do it (Windows' built-in engine)."""
+    from . import ocr
+    return ["OCR"] if ocr.available() else []
 
 
 def convert(src: str | Path, cat: str, target: str) -> list[Path]:
     target = target.upper()
+    if target == "OCR" and cat in ("image", "pdf"):
+        from . import ocr
+        return ocr.image_to_txt(src) if cat == "image" else ocr.pdf_to_searchable(src)
+    if cat in ("video", "audio"):
+        from . import media
+        return media.convert(src, target)
     if cat == "image":
         return image_to(src, target)
     if cat == "pdf":
@@ -377,7 +441,13 @@ def convert(src: str | Path, cat: str, target: str) -> list[Path]:
         if target == "DOCX":
             return pdf_to_docx(src)
     if cat == "docx":
+        if target in ("MD", "HTML"):
+            from . import documents
+            return documents.docx_to_md(src) if target == "MD" else documents.docx_to_html_file(src)
         return docx_to_pdf(src) if target == "PDF" else docx_to_txt(src)
     if cat == "text":
+        from . import documents
+        if Path(src).suffix.lower() in documents.MARKUP_EXTS:
+            return documents.convert_markup(src, target)
         return text_to_pdf(src) if target == "PDF" else text_to_docx(src)
     raise ValueError(f"Can't convert {cat} to {target}")

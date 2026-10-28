@@ -8,13 +8,13 @@ import time
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QDir, QObject, QPointF, QRunnable, Qt, QThreadPool, QTimer, QUrl, Signal
-from PySide6.QtGui import (QAction, QColor, QCursor, QDesktopServices, QGuiApplication, QIcon, QPainter,
+from PySide6.QtCore import QDir, QObject, QPointF, QRunnable, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtGui import (QAction, QColor, QCursor, QGuiApplication, QIcon, QPainter,
                            QPixmap)
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QSystemTrayIcon, QWidget
 
-from . import __version__, convert, glass, imaging, report, tools
+from . import __version__, archive, clipboard, collage, cutout, media, presets, convert, glass, imaging, report, tools
 from .radial import Item, RadialMenu
 from .settings import Settings, SettingsWindow, WelcomeWindow, TRIGGERS
 from .toasts import ToastStack
@@ -22,7 +22,6 @@ from .trigger import DragShiftWatcher
 from .util import UserError, category, file_size, human_size, keep, release
 
 APP_NAME = "DragShift"
-TIP_URL = "https://cash.app/$AtikaKadesha"
 VERSION = __version__
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
@@ -31,22 +30,32 @@ IPC_NAME = ipc_name()
 
 GLYPHS = {"Compress": "⇲", "Metadata": "ⓘ", "Redact": "▮", "Crop": "⌗", "Edit": "☼",
           "Annotate": "✎", "Add BG": "▣", "Resize": "⤢", "Split": "✂", "Rotate": "⟳",
-          "Merge": "⧉", "Protect": "⚿", "Extract": "⧈"}
+          "Merge": "⧉", "Protect": "⚿", "Extract": "⧈", "Copy": "⎘", "Rename": "✐", "Zip": "▤", "Cutout": "◐", "Watermark": "◈", "Mute": "⊘", "Upscale": "⇱"}
 
 HINTS = {
     "Compress": "Shrink file size", "Metadata": "View · remove GPS", "Redact": "Hide private info",
     "Crop": "Trim to a ratio", "Edit": "Light · colour · rotate", "Annotate": "Arrows · text · steps",
     "Add BG": "Gradient backdrop", "Resize": "Change dimensions", "Split": "One PDF per page",
     "Rotate": "Turn pages 90°", "Merge": "Join into one PDF", "Protect": "Add a password",
-    "Extract": "Save embedded images",
+    "Extract": "Save embedded images", "Copy": "To clipboard · paste anywhere",
+    "Rename": "Pattern · numbering", "Zip": "Pack into one .zip", "Cutout": "Remove the background", "Watermark": "Text or logo overlay", "Mute": "Remove the sound", "Upscale": "Bigger · cleaner · AI",
+}
+MEDIA_HINTS = {
+    "MP4": "H.264 · plays everywhere", "WEBM": "VP9 · slow to make", "GIF": "First 20 s · loops",
+    ("video", "MP3"): "Extract the sound", ("video", "WAV"): "Extract · uncompressed",
+    "MP3": "Small, universal", "WAV": "Uncompressed", "FLAC": "Lossless", "M4A": "AAC · Apple-friendly",
+    "OGG": "Open format",
 }
 FORMAT_HINTS = {"JPG": "Small, universal", "PNG": "Lossless · transparency", "WEBP": "Smallest for web",
                 "HEIC": "iPhone format", "TIFF": "Print · archival", "AVIF": "Next-gen, tiny",
                 "BMP": "Uncompressed", "PDF": "Document", "ICO": "Windows icon", "GIF": "Legacy web",
                 "DOCX": "Editable Word", "TXT": "Plain text"}
 
-IMAGE_TOOLS = ["Compress", "Resize", "Crop", "Edit", "Annotate", "Redact", "Add BG", "Metadata"]
-PDF_TOOLS = ["Compress", "Split", "Rotate", "Protect", "Extract", "Metadata"]
+IMAGE_TOOLS = ["Compress", "Resize", "Upscale", "Crop", "Edit", "Annotate", "Redact", "Add BG", "Cutout", "Watermark", "Metadata"]
+PDF_TOOLS = ["Compress", "Split", "Rotate", "Protect", "Extract", "Watermark", "Metadata"]
+VIDEO_TOOLS = ["Compress", "Mute"]
+FILE_TOOLS = {"image": ["Copy", "Rename", "Zip"]}        # the "Files" ring; every other type: Rename, Zip
+OTHER_FILE_TOOLS = ["Rename", "Zip"]
 
 
 # ---------------------------------------------------------------- background jobs
@@ -168,7 +177,6 @@ class DragShiftApp(QObject):
         m.addSeparator()
         m.addAction("Settings…", self.open_settings)
         m.addAction("How to use", self.show_welcome)
-        m.addAction("Tip the developer ♥", lambda: QDesktopServices.openUrl(QUrl(TIP_URL)))
         m.addSeparator()
         m.addAction(f"Quit {APP_NAME}", self.qapp.quit)
         self.tray_menu = m
@@ -239,37 +247,81 @@ class DragShiftApp(QObject):
             return {"Unsupported": []}
         ext = Path(paths[0]).suffix
         same = [p for p in paths if category(p) == cat]
+        if cat in ("video", "audio") and not media.available():
+            return {"Unsupported": []}
         convert_items = []
         for t in convert.targets_for(cat, ext):
             hint = FORMAT_HINTS.get(t, "")
+            if t == "OCR":
+                hint = "Scan → searchable PDF" if cat == "pdf" else "Read the text → .txt"
+            if cat in ("video", "audio"):
+                hint = MEDIA_HINTS.get((cat, t)) or MEDIA_HINTS.get(t, "")
             if cat == "image" and t == "PDF" and len(same) > 1:
                 hint = f"{len(same)} images → 1 PDF"
             convert_items.append(Item(t, key=f"convert:{t}", hint=hint))
+        if cat == "image" and len(same) > 1:
+            # short labels: long ones get clipped on the petals; the notification uses the full names
+            convert_items.append(Item("Anim GIF", key="convert:Animated GIF", hint="Animated GIF · 0.5 s a frame"))
+            convert_items.append(Item("Sheet", key="convert:Contact sheet", hint="Contact sheet · thumbnails"))
         rings: dict[str, list[Item]] = {"Convert": convert_items}
         if cat == "image":
             rings["Tools"] = [Item(n, GLYPHS[n], key=f"tool:{n}", hint=HINTS[n]) for n in IMAGE_TOOLS]
+            rings["Presets"] = [Item(p.name, "★", key=f"preset:{p.name}", hint=p.describe()) for p in presets.load()]
+            rings["Presets"].append(Item("Edit", "⚙", key="presets:edit", hint="Add or change presets"))
+        elif cat == "video":
+            rings["Tools"] = [Item(n, GLYPHS[n], key=f"tool:{n}", hint=HINTS[n]) for n in VIDEO_TOOLS]
         elif cat == "pdf":
             names = PDF_TOOLS[:3] + (["Merge"] if len(same) > 1 else []) + PDF_TOOLS[3:]
             rings["Tools"] = [Item(n, GLYPHS[n], key=f"tool:{n}", hint=HINTS[n]) for n in names]
+        rings["Files"] = [Item(n, GLYPHS[n], key=f"tool:{n}", hint=HINTS[n])
+                          for n in FILE_TOOLS.get(cat, OTHER_FILE_TOOLS)]
         return rings
 
     # ------------------------------------------------------------ actions
     def run_item(self, item: Item, paths: list[str]):
         cat = category(paths[0])
+        everything = list(paths)
         paths = [p for p in paths if category(p) == cat]
         kind, name = item.key.split(":", 1)
+        if kind == "presets":                                # the "Edit" slice of the Presets ring
+            self.open_window(tools.PresetsWindow())
+            return
+        if kind == "preset":
+            preset = presets.find(name)
+            if preset is None:
+                self.toasts.error("Preset not found", f"“{name}” was deleted or renamed.")
+                return
+            self.submit(f"preset:{name}", paths, lambda: [presets.apply_preset(p, preset) for p in paths],
+                        f"Applying {name}…")
+            return
+        if name == "Zip":    # packs everything that was dropped, whatever its type
+            self.submit("tool:Zip", everything, lambda: [archive.zip_files(everything)], "Zipping…")
+            return
         if kind == "convert":
-            if cat == "image" and name == "PDF" and len(paths) > 1:
+            if cat == "image" and name in ("Animated GIF", "Contact sheet"):
+                make = collage.animated_gif if name == "Animated GIF" else collage.contact_sheet
+                self.submit(f"convert:{name}", paths, lambda: make(paths),
+                            "Building animation…" if name == "Animated GIF" else "Building sheet…")
+            elif cat == "image" and name == "PDF" and len(paths) > 1:
                 self.submit(f"convert:{name}", paths, lambda: convert.images_to_single_pdf(paths),
                             f"Combining {len(paths)} images…")
             else:
-                verb = f"Converting to {name}…"
+                verb = f"Converting to {name}…" + (" (this can take a while)" if cat in ("video", "audio") else "")
                 self.submit(f"convert:{name}", paths,
                             lambda: [o for p in paths for o in convert.convert(p, cat, name)], verb)
+            return
+        if cat == "video" and name in VIDEO_TOOLS:
+            f = media.compress_video if name == "Compress" else media.mute_video
+            self.submit(f"tool:{name}", paths, lambda: [f(p) for p in paths],
+                        "Compressing video… (this can take a while)" if name == "Compress" else "Removing sound…")
             return
         if cat == "pdf":
             if name == "Merge":
                 self.submit("tool:Merge", paths, lambda: [imaging.merge_pdfs(paths)], "Merging…")
+            elif name == "Rename":
+                self.open_window(tools.RenameWindow(paths, self.notify))
+            elif name == "Watermark":
+                self.open_window(tools.WatermarkWindow(paths, self.notify))
             elif name == "Metadata":
                 self.open_window(tools.MetadataWindow(paths[0], self.notify, is_pdf=True))
             elif name == "Protect":
@@ -285,7 +337,18 @@ class DragShiftApp(QObject):
         windows = {"Crop": tools.CropWindow, "Add BG": tools.AddBgWindow, "Annotate": tools.AnnotateWindow,
                    "Redact": tools.RedactWindow, "Edit": tools.EditWindow, "Metadata": tools.MetadataWindow}
         try:
-            if name == "Compress":
+            if name == "Cutout":
+                self.submit("tool:Cutout", paths, lambda: [o for p in paths for o in cutout.cut_out(p)],
+                            "Removing background…")
+            elif name == "Copy":
+                self.toasts.info("Copied", clipboard.copy_images(paths))
+            elif name == "Rename":
+                self.open_window(tools.RenameWindow(paths, self.notify))
+            elif name == "Upscale":
+                self.open_window(tools.UpscaleWindow(paths, self.notify))
+            elif name == "Watermark":
+                self.open_window(tools.WatermarkWindow(paths, self.notify))
+            elif name == "Compress":
                 self.open_window(tools.CompressWindow(paths, self.notify))
             elif name == "Resize":
                 self.open_window(tools.ResizeWindow(paths, self.notify))
@@ -435,6 +498,13 @@ def setup_logging():
     return path
 
 
+def startup_notice(argv: list[str], files: list[str]) -> bool:
+    """Whether to show the one-line "DragShift is running" toast right after start-up. It only confirms
+    that a manual launch worked (the app lives in the tray); files passed in, or --quiet (start with
+    Windows), skip it. There is no welcome window and there are no tips."""
+    return not files and "--quiet" not in argv
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv if argv is None else argv
     try:
@@ -468,9 +538,7 @@ def main(argv: list[str] | None = None) -> int:
         app.queue_files(list(qapp.early_files))
     if files:  # e.g. "Send to → DragShift" or drag onto the .exe
         QTimer.singleShot(120, lambda: app.queue_files(files))
-    elif not app.settings.get("welcomed"):
-        QTimer.singleShot(300, app.show_welcome)
-    elif "--quiet" not in argv:
+    elif startup_notice(argv, files):
         QTimer.singleShot(400, lambda: app.toasts.info(
             "DragShift is running", f"Drag any file, then press {app.trigger_label()}."))
     return qapp.exec()
@@ -503,6 +571,8 @@ def selftest() -> int:
             src = Path(d) / "t.png"
             Image.new("RGBA", (64, 48), (255, 100, 80, 255)).save(src)
             for t in convert.targets_for("image", ".png"):
+                if t == "OCR":       # not a file format: tested below, with real text
+                    continue
                 convert.convert(src, "image", t)
             pdf = convert.convert(src, "image", "PDF")[0]
             for t in convert.PDF_TARGETS:
@@ -510,18 +580,64 @@ def selftest() -> int:
             (Path(d) / "n.txt").write_text("hello")
             docx = convert.convert(Path(d) / "n.txt", "text", "DOCX")[0]
             convert.convert(docx, "docx", "TXT")
+            for t in ("MD", "HTML"):
+                convert.convert(docx, "docx", t)
+            (Path(d) / "m.md").write_text("# Hi\n\n- a\n  - b\n\n| x | y |\n|---|---|\n| 1 | 2 |\n")
+            for t in ("PDF", "DOCX", "HTML"):
+                convert.convert(Path(d) / "m.md", "text", t)
+            for t in ("PDF", "DOCX", "MD", "TXT"):
+                convert.convert(Path(d) / "m.html", "text", t)
+            from . import ocr
+            if ocr.available():          # Windows only: a real recognition round trip in the packaged app
+                from PIL import ImageDraw, ImageFont
+                shot = Image.new("RGB", (700, 120), "white")
+                ImageDraw.Draw(shot).text((20, 20), "Selftest 12345", fill="black",
+                                          font=ImageFont.load_default(size=48))
+                if "12345" not in ocr.text_of(ocr.recognize(shot)):
+                    raise RuntimeError("OCR returned no text")
             imaging.add_background(convert.open_image(src), imaging.Background())
             imaging.compress_pdf(pdf)
             imaging.protect_pdf(pdf, "pw")
             from . import liquid
             liquid.render(Image.new("RGB", (80, 80)), liquid.sdf_circle(80, 80, 40, 40, 30))
+            from . import media
+            if media.available():
+                if getattr(sys, "frozen", False) and "imageio_ffmpeg" not in str(media.ffmpeg_exe()):
+                    raise RuntimeError("the packaged app should use its own ffmpeg")
+                clip = Path(d) / "t.mp4"
+                r = media.run_ffmpeg(["-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=1:size=64x64:rate=5",
+                                      "-f", "lavfi", "-i", "sine=duration=1", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                                      "-c:a", "aac", str(clip)])
+                if r.returncode:
+                    raise RuntimeError("ffmpeg failed: " + r.stderr[-200:])
+                for t in ("WEBM", "GIF", "MP3"):
+                    convert.convert(clip, "video", t)
+                media.compress_video(clip)
+                media.mute_video(clip)
+            from . import watermark
+            watermark.watermark_pdf(pdf, watermark.Mark(text="selftest", position="tile"))
+            from . import shellmenu
+            if shellmenu.available():                    # the Send to shortcut needs pywin32: try it in the temp folder only
+                shellmenu.enable_sendto(sendto_dir=Path(d) / "SendTo")
+                if not (Path(d) / "SendTo" / shellmenu.LNK_NAME).exists():
+                    raise RuntimeError("Send to shortcut was not created")
+            from . import presets as _presets
+            for pr in _presets.DEFAULT_PRESETS:                       # the built-in recipes run end to end
+                _presets.apply_preset(src, pr)
+            from . import upscale
+            if upscale.upscale_image(Image.new("RGB", (24, 24), (90, 120, 200)), 2).size != (48, 48):
+                raise RuntimeError("upscale model failed")
+            from . import cutout
+            if cutout.subject_mask(Image.new("RGB", (64, 64), (200, 30, 30))).size != (64, 64):
+                raise RuntimeError("cutout model failed")      # loads the bundled model through ONNX Runtime
             menu = RadialMenu(lambda p: {"Convert": [Item("PNG")]}, lambda p: "1 KB")
             menu._load([str(src)])
             n = lambda *a, **k: None
             for w in (tools.CropWindow(str(src), n), tools.AddBgWindow(str(src), n), tools.EditWindow(str(src), n),
                       tools.AnnotateWindow(str(src), n), tools.RedactWindow(str(src), n),
                       tools.MetadataWindow(str(src), n), tools.CompressWindow([str(src)], n),
-                      tools.ResizeWindow([str(src)], n), tools.ProtectWindow(str(pdf), n)):
+                      tools.ResizeWindow([str(src)], n), tools.ProtectWindow(str(pdf), n),
+                      tools.WatermarkWindow([Path(src)], n), tools.WatermarkWindow([Path(pdf)], n)):
                 w.close()
             ToastStack().info("ok", "ok").dismiss()
             check_text_renders()

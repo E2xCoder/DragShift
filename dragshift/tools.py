@@ -13,14 +13,14 @@ from PIL import Image
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication, QImage, QKeySequence,
                            QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QShortcut)
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QColorDialog, QComboBox, QFrame,
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QColorDialog, QComboBox, QFileDialog, QFrame,
                                QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QPushButton, QSlider, QSpinBox, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
-from . import imaging
-from .util import ui_family
-from .convert import open_image, open_preview
+from . import imaging, presets, remember, rename, upscale, watermark
+from .util import UserError, ui_family
+from .convert import fitz, open_image, open_pdf, open_preview
 from .glass import pil_from_qimage, qimage_from_pil
 from .util import file_size, human_size, sibling
 from .window import GlassWindow, ImageView
@@ -1425,3 +1425,642 @@ class ProtectWindow(ToolWindow):
     def save(self):
         pw, path = self.pw.text(), self.path
         self.run(lambda: [imaging.protect_pdf(path, pw)], "Encrypting…")
+
+
+# ================================================================ RENAME
+class RenameWindow(ToolWindow):
+    tool_name = "Rename"
+
+    def __init__(self, paths, notify):
+        super().__init__("Rename", paths, notify, size=(580, 560))
+        many = len(self.paths) > 1
+        self.body.addWidget(section("Name pattern"))
+        saved = remember.load("rename", {"pattern": ""})["pattern"]
+        self.pattern = QLineEdit(saved or ("{name}_{n}" if many else "{name}"))
+        self.body.addWidget(self.pattern)
+        chips = QHBoxLayout()
+        chips.setSpacing(6)
+        for tok in ("name", "n", "date", "mdate", "parent"):
+            b = QPushButton("{" + tok + "}")
+            b.clicked.connect(lambda _=False, t=tok: self._insert(t))
+            chips.addWidget(b)
+        chips.addStretch(1)
+        self.body.addLayout(chips)
+        hint = QLabel("{name} original name · {n} counter · {date} today · {mdate} file's modified date "
+                      "· {parent} folder. The extension is kept.")
+        hint.setObjectName("dim")
+        hint.setWordWrap(True)
+        self.body.addWidget(hint)
+
+        g = QGridLayout()
+        self.start = QSpinBox()
+        self.start.setRange(0, 99999)
+        self.start.setValue(1)
+        self.digits = QSpinBox()
+        self.digits.setRange(1, 8)
+        self.digits.setValue(max(1, len(str(len(self.paths)))))
+        g.addWidget(QLabel("Start counting at"), 0, 0)
+        g.addWidget(self.start, 0, 1)
+        g.addWidget(QLabel("Digits (zero-padded)"), 1, 0)
+        g.addWidget(self.digits, 1, 1)
+        g.setColumnStretch(2, 1)
+        self.body.addLayout(g)
+
+        self.body.addWidget(section("Preview"))
+        self.preview = QLabel()
+        self.preview.setTextFormat(Qt.PlainText)
+        self.preview.setWordWrap(True)
+        self.preview.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.body.addWidget(self.preview, 1)
+        note = QLabel("Renames the files in place. Undo in the notification puts the old names back.")
+        note.setObjectName("dim")
+        note.setWordWrap(True)
+        self.body.addWidget(note)
+        self.body.addLayout(self.footer("Rename", self.save))
+
+        for w in (self.pattern,):
+            w.textChanged.connect(self._refresh)
+        self.start.valueChanged.connect(self._refresh)
+        self.digits.valueChanged.connect(self._refresh)
+        self._pairs = []
+        self._refresh()
+        QTimer.singleShot(0, self.pattern.setFocus)
+
+    def _insert(self, tok: str):
+        self.pattern.insert("{" + tok + "}")
+        self.pattern.setFocus()
+
+    def _refresh(self):
+        try:
+            self._pairs = rename.plan(self.paths, self.pattern.text(), self.start.value(), self.digits.value())
+        except UserError as e:
+            self._pairs = []
+            self.preview.setText(str(e))
+            self.primary_btn.setEnabled(False)
+            return
+        except OSError as e:     # a file vanished while the window was open
+            self._pairs = []
+            self.preview.setText(f"Can't read a file: {e}")
+            self.primary_btn.setEnabled(False)
+            return
+        shown = [f"{s.name}  →  {d.name}" for s, d in self._pairs[:10]]
+        if len(self._pairs) > 10:
+            shown.append(f"… and {len(self._pairs) - 10} more")
+        changed = sum(1 for s, d in self._pairs if s.name != d.name)
+        if not changed:
+            shown.append("\nNothing would change yet.")
+        self.preview.setText("\n".join(shown))
+        self.primary_btn.setEnabled(bool(changed))
+
+    def save(self):
+        pairs, order = self._pairs, list(self.paths)
+        if not pairs:
+            return
+        remember.save("rename", {"pattern": self.pattern.text()})
+
+        def job():
+            new = dict(zip([s for s, _ in pairs], rename.apply(pairs)))
+            return [new[p] for p in order]     # same order as the sources, so Undo lines up
+
+        self.run(job, "Renaming…")
+
+
+# ================================================================ WATERMARK
+class WatermarkWindow(ToolWindow):
+    tool_name = "Watermark"
+    SWATCHES = ["#ffffff", "#111111", "#e11d48", "#2563eb", "#f59e0b"]
+    POS_GLYPHS = ["↖", "↑", "↗", "←", "●", "→", "↙", "↓", "↘"]
+    TILE = 9
+    DEFAULTS = {"mode": 0, "text": "Confidential", "logo": "", "color": "#ffffff", "pos": 8, "size": 30,
+                "opacity": 50, "angle": 0, "margin": 3, "gap": 100, "shadow": True}
+
+    def __init__(self, paths, notify):
+        super().__init__("Watermark", paths, notify, size=(900, 860))
+        self.small = self._preview_source(self.paths[0])
+        self.color, self.logo = "#ffffff", ""
+
+        self.preview = QLabel()
+        self.preview.setAlignment(Qt.AlignCenter)
+        self.preview.setMinimumSize(360, 260)
+        self.body.addWidget(self.preview, 1)
+        self.msg = QLabel()
+        self.msg.setObjectName("dim")
+        self.msg.setAlignment(Qt.AlignCenter)
+        self.body.addWidget(self.msg)
+
+        row, self.mode = toggle_row(["Text", "Logo"])
+        self.body.addLayout(row)
+
+        self.text_box = QWidget()
+        tl = QVBoxLayout(self.text_box)
+        tl.setContentsMargins(0, 0, 0, 0)
+        self.text = QLineEdit("Confidential")
+        self.text.setPlaceholderText("Watermark text  (type \\n for a second line)")
+        tl.addWidget(self.text)
+        sw = QHBoxLayout()
+        sw.setSpacing(6)
+        self.sw_grp = QButtonGroup(self)
+        for i, c in enumerate(self.SWATCHES):
+            b = QPushButton()
+            b.setObjectName("swatch")
+            b.setCheckable(True)
+            b.setChecked(i == 0)
+            b.setStyleSheet(f"background: {c};")
+            b.clicked.connect(lambda _=False, col=c: self._set_color(col))
+            self.sw_grp.addButton(b, i)
+            sw.addWidget(b)
+        custom = QPushButton("＋")
+        custom.setObjectName("swatch")
+        custom.setToolTip("Custom colour")
+        custom.clicked.connect(self._custom_color)
+        sw.addWidget(custom)
+        self.shadow = QCheckBox("Soft shadow")
+        self.shadow.setChecked(True)
+        sw.addSpacing(12)
+        sw.addWidget(self.shadow)
+        sw.addStretch(1)
+        tl.addLayout(sw)
+        self.body.addWidget(self.text_box)
+
+        self.logo_box = QWidget()
+        ll = QHBoxLayout(self.logo_box)
+        ll.setContentsMargins(0, 0, 0, 0)
+        pick = QPushButton("Choose logo…")
+        pick.clicked.connect(self._pick_logo)
+        self.logo_name = QLabel("No logo chosen (a PNG with a transparent background works best)")
+        self.logo_name.setObjectName("dim")
+        ll.addWidget(pick)
+        ll.addWidget(self.logo_name, 1)
+        self.body.addWidget(self.logo_box)
+
+        mid = QHBoxLayout()
+        mid.setSpacing(24)
+        col = QVBoxLayout()
+        col.addWidget(section("Position"))
+        pg = QGridLayout()
+        pg.setSpacing(4)
+        self.pos_grp = QButtonGroup(self)
+        for i, g in enumerate(self.POS_GLYPHS):
+            b = QPushButton(g)
+            b.setCheckable(True)
+            b.setChecked(i == 8)
+            b.setFixedSize(40, 34)
+            self.pos_grp.addButton(b, i)
+            pg.addWidget(b, i // 3, i % 3)
+        tile = QPushButton("Tile across page")
+        tile.setCheckable(True)
+        self.pos_grp.addButton(tile, self.TILE)
+        pg.addWidget(tile, 3, 0, 1, 3)
+        col.addLayout(pg)
+        col.addStretch(1)
+        mid.addLayout(col)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        self.siz = slider(5, 100, 30)
+        self.opa = slider(5, 100, 50)
+        self.ang = slider(-90, 90, 0)
+        self.mar = slider(0, 15, 3)
+        self.gap = slider(0, 300, 100)
+        slider_row(grid, 0, "Size", self.siz, lambda v: f"{v}%")
+        slider_row(grid, 1, "Opacity", self.opa, lambda v: f"{v}%")
+        slider_row(grid, 2, "Angle", self.ang, lambda v: f"{v}°")
+        slider_row(grid, 3, "Margin", self.mar, lambda v: f"{v}%")
+        slider_row(grid, 4, "Tile spacing", self.gap, lambda v: f"{v}%")
+        mid.addLayout(grid, 1)
+        self.body.addLayout(mid)
+
+        self.body.addLayout(self.footer("Add Watermark", self.save, self.reset))
+        self._restore(remember.load("watermark", self.DEFAULTS))
+
+        self._timer = QTimer(self, singleShot=True, interval=16, timeout=self.render)
+        for s in (self.siz, self.opa, self.ang, self.mar, self.gap):
+            s.valueChanged.connect(lambda _: self._timer.start())
+        self.text.textChanged.connect(lambda _: self._timer.start())
+        self.shadow.toggled.connect(lambda _: self._timer.start())
+        self.mode.idClicked.connect(self._mode_changed)
+        self.pos_grp.idClicked.connect(self._position_changed)
+        self._mode_changed()
+        QTimer.singleShot(0, self.text.setFocus)
+
+    # ---------------------------------------------------------- inputs
+    @staticmethod
+    def _preview_source(path: Path) -> Image.Image:
+        if path.suffix.lower() != ".pdf":
+            return open_preview(path, 760).convert("RGB")
+        with open_pdf(path) as doc:
+            page = doc[0]
+            z = 760 / max(page.rect.width, page.rect.height)
+            pix = page.get_pixmap(matrix=fitz.Matrix(z, z), alpha=False)
+            return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+    def _restore(self, v: dict):
+        """Put back what was used last time (before any signal is connected, so nothing re-renders)."""
+        self.text.setText(v["text"])
+        self.siz.setValue(v["size"])
+        self.opa.setValue(v["opacity"])
+        self.ang.setValue(v["angle"])
+        self.mar.setValue(v["margin"])
+        self.gap.setValue(v["gap"])
+        self.shadow.setChecked(v["shadow"])
+        self.pos_grp.button(v["pos"] if 0 <= v["pos"] <= self.TILE else 8).setChecked(True)
+        color = v["color"] if len(v["color"]) == 7 and v["color"].startswith("#") and QColor(v["color"]).isValid()             else self.DEFAULTS["color"]
+        self.color = color
+        if color in self.SWATCHES:
+            self.sw_grp.button(self.SWATCHES.index(color)).setChecked(True)
+        else:                                        # a custom colour: no preset swatch is lit
+            self.sw_grp.setExclusive(False)
+            for b in self.sw_grp.buttons():
+                b.setChecked(False)
+            self.sw_grp.setExclusive(True)
+        if v["logo"] and Path(v["logo"]).is_file():  # the logo may have been moved or deleted since
+            self.logo = v["logo"]
+            self.logo_name.setText(Path(v["logo"]).name)
+        self.mode.button(1 if (v["mode"] == 1 and self.logo) else 0).setChecked(True)
+
+    def _collect(self) -> dict:
+        return {"mode": self.mode.checkedId(), "text": self.text.text(), "logo": self.logo, "color": self.color,
+                "pos": self.pos_grp.checkedId(), "size": self.siz.value(), "opacity": self.opa.value(),
+                "angle": self.ang.value(), "margin": self.mar.value(), "gap": self.gap.value(),
+                "shadow": self.shadow.isChecked()}
+
+    def _scope_note(self) -> str:
+        what = "every page" if self.paths[0].suffix.lower() == ".pdf" else "each image"
+        if len(self.paths) > 1:
+            return f"Applies to {len(self.paths)} files ({what}) · the preview shows the first"
+        return f"Applies to {what}"
+
+    def _set_color(self, c: str):
+        self.color = c
+        self._timer.start()
+
+    def _custom_color(self):
+        c = QColorDialog.getColor(QColor(self.color), self, "Text colour")
+        if c.isValid():
+            self.sw_grp.setExclusive(False)
+            for b in self.sw_grp.buttons():
+                b.setChecked(False)
+            self.sw_grp.setExclusive(True)
+            self._set_color(c.name())
+
+    def _pick_logo(self):
+        f, _ = QFileDialog.getOpenFileName(self, "Choose a logo", "",
+                                           "Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.tif *.tiff)")
+        if f:
+            self.logo = f
+            self.logo_name.setText(Path(f).name)
+            self._timer.start()
+
+    def _mode_changed(self, *_):
+        logo = self.mode.checkedId() == 1
+        self.text_box.setVisible(not logo)
+        self.logo_box.setVisible(logo)
+        self._timer.start()
+
+    def _position_changed(self, i: int):
+        if i == self.TILE and self.ang.value() == 0:
+            self.ang.setValue(-30)                 # diagonal tiles are the usual look
+        elif i != self.TILE and self.ang.value() == -30:
+            self.ang.setValue(0)
+        self._timer.start()
+
+    def _mark(self) -> watermark.Mark:
+        logo = self.mode.checkedId() == 1
+        pos = self.pos_grp.checkedId()
+        return watermark.Mark(
+            text="" if logo else self.text.text().replace("\\n", "\n"), logo=self.logo if logo else "",
+            position="tile" if pos == self.TILE else watermark.POSITIONS[pos if pos >= 0 else 8],
+            opacity=self.opa.value() / 100, size=self.siz.value() / 100, angle=self.ang.value(),
+            margin=self.mar.value() / 100, color=self.color, shadow=self.shadow.isChecked(),
+            gap=self.gap.value() / 100)
+
+    # ---------------------------------------------------------- preview
+    def render(self):
+        try:
+            out = watermark.apply(self.small, self._mark())
+            ok, note = True, self._scope_note()
+        except UserError as e:
+            out, ok, note = self.small, False, str(e)
+        self.msg.setText(note)
+        self.primary_btn.setEnabled(ok)
+        pm = QPixmap.fromImage(qimage_from_pil(out))
+        self.preview.setPixmap(pm.scaled(self.preview.size() - QSize(10, 10), Qt.KeepAspectRatio,
+                                         Qt.SmoothTransformation))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if hasattr(self, "_timer"):
+            self._timer.start()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        QTimer.singleShot(0, self.render)
+
+    def reset(self):
+        self.siz.setValue(30); self.opa.setValue(50); self.ang.setValue(0); self.mar.setValue(3); self.gap.setValue(100)
+        self.pos_grp.button(8).setChecked(True)
+        self.sw_grp.button(0).setChecked(True)
+        self.shadow.setChecked(True)
+        self._set_color(self.SWATCHES[0])
+
+    def save(self):
+        mark, paths = self._mark(), [str(p) for p in self.paths]
+        remember.save("watermark", self._collect())
+
+        def work():
+            return [watermark.watermark_pdf(p, mark) if p.lower().endswith(".pdf") else watermark.watermark_image(p, mark)
+                    for p in paths]
+        self.run(work, "Adding watermark…")
+
+
+# ================================================================ UPSCALE
+class UpscaleWindow(ToolWindow):
+    tool_name = "Upscale"
+    CHOICES = [(1, "Enhance · same size"), (2, "2×"), (4, "4×")]
+    CROP = 128                 # the before/after preview works on this much of the picture's centre
+    SHOW = 300                 # …shown this big
+
+    def __init__(self, paths, notify):
+        super().__init__("Upscale", paths, notify, size=(780, 640))
+        self.src = open_image(self.paths[0]).convert("RGB")
+        self.sizes = [self._size(p) for p in self.paths]
+
+        self.body.addWidget(section("Result"))
+        last = remember.load("upscale", {"scale": 2})["scale"]
+        row, self.choice = toggle_row([label for _, label in self.CHOICES],
+                                      checked=next((i for i, (s, _) in enumerate(self.CHOICES) if s == last), 1))
+        self.body.addLayout(row)
+        self.info = QLabel()
+        self.info.setObjectName("dim")
+        self.info.setWordWrap(True)
+        self.body.addWidget(self.info)
+
+        self.body.addWidget(section("Preview · centre of the picture"))
+        pv = QHBoxLayout()
+        pv.setSpacing(16)
+        self.before, self.after = QLabel(), QLabel()
+        for lab, title in ((self.before, "Plain enlargement"), (self.after, "DragShift")):
+            col = QVBoxLayout()
+            lab.setFixedSize(self.SHOW, self.SHOW)
+            lab.setAlignment(Qt.AlignCenter)
+            cap = QLabel(title)
+            cap.setObjectName("dim")
+            cap.setAlignment(Qt.AlignCenter)
+            col.addWidget(lab)
+            col.addWidget(cap)
+            pv.addLayout(col)
+        pv.addStretch(1)
+        self.body.addLayout(pv)
+        warn = QLabel("An AI model redraws the picture: it removes noise and blur and sharpens edges, but it "
+                      "invents detail. Very small text or faces can come out altered, so compare with the original.")
+        warn.setObjectName("dim")
+        warn.setWordWrap(True)
+        self.body.addWidget(warn)
+        self.body.addStretch(1)
+        self.body.addLayout(self.footer("Upscale", self.save))
+
+        # scales whose result would be too big for any of the files can't be chosen
+        for i, (scale, _) in enumerate(self.CHOICES):
+            ok = all(self._fits(s, scale) for s in self.sizes)
+            self.choice.button(i).setEnabled(ok)
+            if not ok:
+                self.choice.button(i).setToolTip("The result would be too large")
+        if not self.choice.button(self.choice.checkedId()).isEnabled():      # a remembered scale may not fit this file
+            fallback = next((i for i in (1, 0, 2) if self.choice.button(i).isEnabled()), None)
+            if fallback is not None:
+                self.choice.button(fallback).setChecked(True)
+        self.choice.idClicked.connect(lambda _: self._changed())
+        self._changed(preview=False)                                  # text now, the (slower) preview once shown
+        QTimer.singleShot(0, lambda: self._preview(self._scale()))
+
+    @staticmethod
+    def _size(path: Path) -> tuple[int, int]:
+        with Image.open(path) as im:
+            w, h = im.size
+            return (h, w) if im.getexif().get(0x0112, 1) in (5, 6, 7, 8) else (w, h)
+
+    @staticmethod
+    def _fits(size, scale) -> bool:
+        try:
+            upscale.check_size(size, scale)
+            return True
+        except UserError:
+            return False
+
+    def _scale(self) -> int:
+        return self.CHOICES[max(0, self.choice.checkedId())][0]
+
+    def _changed(self, preview: bool = True):
+        scale = self._scale()
+        w, h = self.sizes[0]
+        W, H = upscale.output_size((w, h), scale)
+        total = sum(a * b for a, b in self.sizes)
+        eta = max(1, round(total / 150_000))                      # about 150 thousand input pixels a second
+        many = f" · {len(self.paths)} files" if len(self.paths) > 1 else ""
+        self.info.setText((f"{w}×{h} → {W}×{H} px" if scale != 1 else f"{w}×{h} px, cleaned up")
+                          + f"  ·  roughly {eta} s{many}")
+        self.primary_btn.setText("Enhance" if scale == 1 else f"Upscale {scale}×")
+        if preview:
+            self._preview(scale)
+
+    def _preview(self, scale: int):
+        side = min(self.CROP, *self.src.size)
+        x, y = (self.src.width - side) // 2, (self.src.height - side) // 2
+        crop = self.src.crop((x, y, x + side, y + side))
+        try:
+            better = upscale.upscale_rgb(crop, 4)
+        except UserError as e:
+            self.after.setText(str(e))
+            return
+        plain = crop.resize(better.size, Image.BICUBIC)
+        for lab, im in ((self.before, plain), (self.after, better)):
+            pm = QPixmap.fromImage(qimage_from_pil(im.resize((self.SHOW, self.SHOW), Image.LANCZOS)))
+            lab.setPixmap(pm)
+
+    def save(self):
+        scale, paths = self._scale(), [str(p) for p in self.paths]
+        remember.save("upscale", {"scale": scale})
+
+        def work():
+            return [o for p in paths for o in upscale.upscale_file(p, scale)]
+        self.run(work, "Upscaling… (this can take a while)" if scale != 1 else "Enhancing…")
+
+
+# ================================================================ PRESETS EDITOR
+class PresetsWindow(GlassWindow):
+    """Add, change and delete presets. Every change is saved as you make it."""
+
+    def __init__(self, notify=None):
+        super().__init__("Presets", size=(620, 620))
+        self.presets = presets.load()
+        self._loading = False
+
+        top = QHBoxLayout()
+        self.pick = QComboBox()
+        top.addWidget(self.pick, 1)
+        self.new_btn = QPushButton("New")
+        self.del_btn = QPushButton("Delete")
+        self.defaults_btn = QPushButton("Restore examples")
+        self.defaults_btn.setToolTip("Add the built-in Web, Email and Thumb presets back")
+        for b in (self.new_btn, self.del_btn, self.defaults_btn):
+            top.addWidget(b)
+        self.body.addLayout(top)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+        self.name = QLineEdit()
+        self.name.setMaxLength(presets.NAME_MAX)
+        self.name.setPlaceholderText(f"Up to {presets.NAME_MAX} characters, shown on the menu")
+        grid.addWidget(QLabel("Name"), 0, 0)
+        grid.addWidget(self.name, 0, 1, 1, 2)
+
+        self.side = QSpinBox()
+        self.side.setRange(*presets.LIMITS["max_side"])
+        self.side.setSingleStep(100)
+        self.side.setSuffix(" px")
+        self.side.setSpecialValueText("Keep size")
+        grid.addWidget(QLabel("Longest side"), 1, 0)
+        grid.addWidget(self.side, 1, 1)
+        hint = QLabel("Only shrinks, never enlarges")
+        hint.setObjectName("dim")
+        grid.addWidget(hint, 1, 2)
+
+        self.fmt = QComboBox()
+        for f in presets.FORMATS:
+            self.fmt.addItem(presets.FORMAT_LABELS[f], f)
+        grid.addWidget(QLabel("Format"), 2, 0)
+        grid.addWidget(self.fmt, 2, 1)
+
+        self.q = slider(*presets.LIMITS["quality"], 85)
+        self.q_val = slider_row(grid, 3, "Quality", self.q, lambda v: f"{v}%")
+
+        self.kb = QSpinBox()
+        self.kb.setRange(*presets.LIMITS["max_kb"])
+        self.kb.setSingleStep(50)
+        self.kb.setSuffix(" KB")
+        self.kb.setSpecialValueText("No limit")
+        grid.addWidget(QLabel("Keep under"), 4, 0)
+        grid.addWidget(self.kb, 4, 1)
+        hint2 = QLabel("Lowers quality, then size, until it fits")
+        hint2.setObjectName("dim")
+        grid.addWidget(hint2, 4, 2)
+
+        self.strip = QCheckBox("Remove camera info and GPS location")
+        grid.addWidget(self.strip, 5, 1, 1, 2)
+        grid.setColumnStretch(2, 1)
+        self.body.addLayout(grid)
+
+        self.summary = QLabel()
+        self.summary.setObjectName("dim")
+        self.summary.setWordWrap(True)
+        self.body.addWidget(self.summary)
+        self.note = QLabel()
+        self.note.setObjectName("dim")
+        self.note.setWordWrap(True)
+        self.body.addWidget(self.note)
+        self.body.addStretch(1)
+        foot = QHBoxLayout()
+        foot.addStretch(1)
+        done = QPushButton("Done")
+        done.setObjectName("primary")
+        done.clicked.connect(self.close)
+        foot.addWidget(done)
+        self.body.addLayout(foot)
+
+        self.new_btn.clicked.connect(self._new)
+        self.del_btn.clicked.connect(self._delete)
+        self.defaults_btn.clicked.connect(self._restore_examples)
+        self.pick.currentIndexChanged.connect(lambda _: self._show())
+        self.name.textEdited.connect(lambda _: self._edited())
+        self.side.valueChanged.connect(lambda _: self._edited())
+        self.fmt.currentIndexChanged.connect(lambda _: self._edited())
+        self.q.valueChanged.connect(lambda _: self._edited())
+        self.kb.valueChanged.connect(lambda _: self._edited())
+        self.strip.toggled.connect(lambda _: self._edited())
+        self._fill_picker(0)
+
+    # ---------------------------------------------------------- list
+    def _fill_picker(self, index: int):
+        self._loading = True
+        self.pick.clear()
+        for p in self.presets:
+            self.pick.addItem(p.name)
+        self.pick.setCurrentIndex(min(index, len(self.presets) - 1) if self.presets else -1)
+        self._loading = False
+        self._show()
+
+    def _current(self):
+        i = self.pick.currentIndex()
+        return self.presets[i] if 0 <= i < len(self.presets) else None
+
+    def _show(self):
+        p = self._current()
+        have = p is not None
+        for w in (self.name, self.side, self.fmt, self.q, self.kb, self.strip, self.del_btn):
+            w.setEnabled(have)
+        self.note.setText("" if have else "No presets yet. Click New to make one.")
+        if not have:
+            self.summary.setText("")
+            return
+        self._loading = True
+        self.name.setText(p.name)
+        self.side.setValue(p.max_side)
+        self.fmt.setCurrentIndex(max(0, presets.FORMATS.index(p.fmt)))
+        self.q.setValue(p.quality)
+        self.kb.setValue(p.max_kb)
+        self.strip.setChecked(p.strip)
+        self._loading = False
+        self._sync_enabled()
+        self.summary.setText("On the menu: " + p.describe())
+
+    def _sync_enabled(self):
+        self.q.setEnabled(self.fmt.currentData() != "PNG" and self._current() is not None)
+
+    # ---------------------------------------------------------- editing
+    def _edited(self):
+        if self._loading:
+            return
+        i = self.pick.currentIndex()
+        if not (0 <= i < len(self.presets)):
+            return
+        name = self.name.text().strip()
+        clash = any(j != i and q.name.lower() == name.lower() for j, q in enumerate(self.presets))
+        self.note.setText("Another preset already has that name." if clash else
+                          "" if name else "A preset needs a name.")
+        p = self.presets[i]
+        if name and not clash:
+            p.name = name
+        p.max_side, p.fmt, p.quality = self.side.value(), self.fmt.currentData(), self.q.value()
+        p.max_kb, p.strip = self.kb.value(), self.strip.isChecked()
+        self.presets[i] = presets.clean(p)
+        presets.save(self.presets)
+        p = self.presets[i]
+        self.pick.setItemText(i, p.name)
+        self._sync_enabled()
+        self.summary.setText("On the menu: " + p.describe())
+
+    def _new(self):
+        p = presets.Preset(presets.unique_name("My preset", self.presets), 1600, "JPG", 85, 0, False)
+        self.presets.append(p)
+        presets.save(self.presets)
+        self._fill_picker(len(self.presets) - 1)
+        self.name.setFocus()
+        self.name.selectAll()
+
+    def _delete(self):
+        i = self.pick.currentIndex()
+        if 0 <= i < len(self.presets):
+            gone = self.presets.pop(i).name
+            presets.save(self.presets)
+            self._fill_picker(max(0, i - 1))
+            self.note.setText(f"Deleted “{gone}”." if self.presets else self.note.text())
+
+    def _restore_examples(self):
+        have = {p.name.lower() for p in self.presets}
+        added = [presets.Preset(**vars(p)) for p in presets.DEFAULT_PRESETS if p.name.lower() not in have]
+        self.presets += added
+        presets.save(self.presets)
+        self._fill_picker(self.pick.currentIndex() if self.presets else 0)
+        self.note.setText(f"Added {len(added)} example preset{'s' if len(added) != 1 else ''}." if added
+                          else "The examples are already there.")

@@ -35,7 +35,7 @@ def pdf(tmp_path, img) -> Path:
     return p
 
 
-@pytest.mark.parametrize("target", convert.targets_for("image", ".png"))
+@pytest.mark.parametrize("target", [t for t in convert.targets_for("image", ".png") if t != "OCR"])  # OCR: test_ocr.py
 def test_image_targets(img, target):
     out = convert.convert(img, "image", target)[0]
     assert out.exists() and out.stat().st_size > 0

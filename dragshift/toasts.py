@@ -18,7 +18,7 @@ from PySide6.QtGui import (QColor, QCursor, QDesktopServices, QFont, QFontMetric
 from PySide6.QtWidgets import QWidget
 
 from . import glass
-from .util import ui_family
+from .util import UserError, ui_family
 from .report import Result
 
 W, H = 380, 104
@@ -205,6 +205,16 @@ class ToastCard(QWidget):
         elif name == "Show":
             reveal(r.outs[0])
             self.dismiss()
+        elif name == "Undo" and r.undo:
+            try:
+                n = r.undo()
+            except UserError as e:
+                self.error("Couldn't undo", str(e))
+                return
+            self.result = None
+            self.thumb = None
+            self.good = ""
+            self.info("Undone", f"Restored {n} original name{'s' if n != 1 else ''}", 2500)
         elif name == "Undo":
             n = trash(r.outs)
             self.result = None
